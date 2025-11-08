@@ -1,0 +1,143 @@
+# HMAC-Net 數據配置檔案
+
+# 數據集路徑配置
+datasets:
+  # 第一階段：面向級別（Aspect-level）數據集
+  aspect_level:
+    semeval2014:
+      restaurant:
+        name: "SemEval-2014 Restaurant"
+        train: "data/raw/semeval2014/Restaurants_Train_v2.xml"
+        test: "data/raw/semeval2014/Restaurants_Test_Data_phaseB.xml"
+        domain: "restaurant"
+        num_samples: ~3000
+
+      laptop:
+        name: "SemEval-2014 Laptop"
+        train: "data/raw/semeval2014/Laptop_Train_v2.xml"
+        test: "data/raw/semeval2014/Laptops_Test_Data_phaseB.xml"
+        domain: "laptop"
+        num_samples: ~3000
+
+    semeval2015:
+      restaurant:
+        name: "SemEval-2015 Restaurant"
+        train: "data/raw/semeval2015/restaurant_train.xml"
+        test: "data/raw/semeval2015/restaurant_test.xml"
+        domain: "restaurant"
+
+    semeval2016:
+      restaurant:
+        name: "SemEval-2016 Restaurant"
+        train: "data/raw/semeval2016/restaurant_train.xml"
+        test: "data/raw/semeval2016/restaurant_test.xml"
+        domain: "restaurant"
+
+  # 第二階段：句子級別（Sentence-level）數據集
+  sentence_level:
+    imdb:
+      name: "IMDB Movie Reviews"
+      path: "data/raw/imdb/"
+      domain: "movie"
+      enabled: false  # 第二階段啟用
+
+    amazon:
+      name: "Amazon Product Reviews"
+      path: "data/raw/amazon/"
+      domain: "product"
+      enabled: false
+
+    hotel:
+      name: "Hotel Reviews"
+      path: "data/raw/hotel/"
+      domain: "hotel"
+      enabled: false
+
+    twitter:
+      name: "Twitter Sentiment"
+      path: "data/raw/twitter/"
+      domain: "social_media"
+      enabled: false
+
+# 當前使用的數據集
+current_dataset:
+  type: "aspect_level"      # "aspect_level" 或 "sentence_level"
+  name: "semeval2014"
+  split: "restaurant"       # 或 "laptop"
+
+# 數據預處理參數
+preprocessing:
+  # 文本處理
+  text:
+    lowercase: true         # 是否轉小寫
+    remove_punctuation: false  # 是否移除標點（保留以提供更多語境）
+    max_seq_length: 80      # 最大序列長度
+    min_word_freq: 2        # 最小詞頻（用於構建詞彙表）
+    tokenizer: "spacy"      # 分詞器: "spacy", "nltk", "simple"
+
+  # 面向詞處理
+  aspect:
+    max_aspect_length: 10   # 單個面向的最大長度
+    max_num_aspects: 5      # 每個樣本最多的面向數
+    aspect_pooling: "mean"  # 面向嵌入池化方式: "mean", "max", "attention"
+
+  # 標籤編碼
+  labels:
+    positive: 2
+    neutral: 1
+    negative: 0
+    conflict: -1            # 衝突標籤（通常過濾掉）
+    filter_conflict: true   # 是否過濾衝突樣本
+
+# 數據劃分
+data_split:
+  # 如果數據集有預定義的 train/test，則使用以下比例劃分 train
+  train_ratio: 0.8          # 訓練集比例（從原始 train 中劃分）
+  val_ratio: 0.2            # 驗證集比例（從原始 train 中劃分）
+
+  # 劃分策略
+  split_strategy: "stratified"  # "stratified", "random", "sequential"
+  shuffle: true             # 是否打亂數據
+
+# 數據增強（可選）
+augmentation:
+  enabled: false            # 是否啟用數據增強
+  methods:
+    - name: "synonym_replacement"
+      probability: 0.1
+    - name: "random_deletion"
+      probability: 0.1
+    - name: "random_swap"
+      probability: 0.1
+
+# 批次處理
+batching:
+  shuffle_train: true       # 訓練時是否打亂
+  drop_last: false          # 是否丟棄最後不完整的批次
+  num_workers: 4            # DataLoader 工作執行緒數
+  pin_memory: true          # 是否使用固定記憶體（GPU 加速）
+
+# 快取設定
+cache:
+  enabled: true             # 是否啟用快取
+  cache_dir: "data/processed/cache"
+  cache_preprocessed: true  # 快取預處理後的數據
+  cache_embeddings: true    # 快取嵌入向量
+
+# 詞嵌入配置
+embeddings:
+  glove:
+    path: "data/embeddings/glove.840B.300d.txt"
+    dim: 300
+
+  bert:
+    model_name: "bert-base-uncased"
+    dim: 768
+    max_length: 512
+
+# 統計資訊輸出
+statistics:
+  print_dataset_info: true      # 是否打印數據集統計資訊
+  save_vocab: true              # 是否保存詞彙表
+  save_statistics: true         # 是否保存數據統計
+  output_dir: "results/reports"

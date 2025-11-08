@@ -1,0 +1,263 @@
+HMAC-Net 實驗程式架構設計
+一、專案目錄結構
+HMAC-Net/
+├── data/
+│   ├── raw/                      # 原始數據
+│   ├── processed/                # 預處理後數據
+│   └── embeddings/               # GloVe/BERT embeddings
+├── models/
+│   ├── base_model.py            # 基礎模型類
+│   ├── aaha.py                  # AAHA模組
+│   ├── pmac.py                  # PMAC模組
+│   ├── iarm.py                  # IARM模組
+│   ├── hmac_net.py              # 完整HMAC-Net
+│   └── baselines.py             # Baseline模型 (LSTM, ATAE-LSTM, IAN)
+├── utils/
+│   ├── data_loader.py           # 數據載入與批次處理
+│   ├── preprocessor.py          # 數據預處理
+│   ├── metrics.py               # 評估指標計算
+│   ├── visualization.py         # 注意力視覺化
+│   └── logger.py                # 日誌記錄
+├── experiments/
+│   ├── train.py                 # 訓練腳本
+│   ├── evaluate.py              # 評估腳本
+│   ├── ablation_study.py        # 消融實驗
+│   └── compare_baselines.py     # Baseline比較
+├── configs/
+│   ├── model_config.yaml        # 模型超參數
+│   ├── experiment_config.yaml   # 實驗配置
+│   └── data_config.yaml         # 數據配置
+├── results/
+│   ├── checkpoints/             # 模型檢查點
+│   ├── logs/                    # 訓練日誌
+│   ├── visualizations/          # 視覺化圖表
+│   └── reports/                 # 實驗報告
+├── requirements.txt
+└── README.md
+
+二、架構圖
+┌─────────────────────────────────────────────────────────────┐
+│                      HMAC-Net Architecture                  │
+└─────────────────────────────────────────────────────────────┘
+
+Input: Sentence + Aspect Terms
+         ↓
+┌─────────────────────┐
+│  Embedding Layer    │  ← GloVe/BERT embeddings
+└──────────┬──────────┘
+           ↓
+┌─────────────────────────────────────────────────────────────┐
+│  AAHA Module (Aspect-Aware Hierarchical Attention)          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
+│  │  Word-level  │→ │ Phrase-level │→ │Sentence-level│       │
+│  │  Attention   │  │  Attention   │  │  Attention   │       │
+│  └──────────────┘  └──────────────┘  └──────────────┘       │
+└──────────────────────────┬──────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────┐
+│  PMAC Module (Progressive Multi-Aspect Composition)         │
+│  ┌────────────────┐                                         │
+│  │ Multi-granular │ → Aspect Feature Fusion                 │
+│  │ Representation │                                         │
+│  └────────────────┘                                         │
+└──────────────────────────┬──────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────┐
+│  IARM Module (Inter-Aspect Relation Modeling)               │
+│  ┌───────────────────────────────────────┐                  │
+│  │  Aspect1 ←→ Aspect2 ←→ Aspect3        │                  │
+│  │     (Relation Graph / Attention)      │                  │
+│  └───────────────────────────────────────┘                  │
+└──────────────────────────────────────────┬──────────────────┘
+                                           ↓
+                              ┌────────────────────┐
+                              │  Classifier Layer  │
+                              │  (Softmax)         │
+                              └─────────┬──────────┘
+                                        ↓
+                           Output: Sentiment (Pos/Neg/Neu)
+
+三、核心模組說明
+1. AAHA Module (aaha.py)
+pythonclass AAHA(nn.Module):
+    """
+    Aspect-Aware Hierarchical Attention
+    
+    功能：
+    - 三層階層式注意力 (word/phrase/sentence)
+    - 每層都感知aspect信息
+    - 動態調整注意力權重
+    
+    輸入：
+    - hidden_states: [batch, seq_len, hidden_dim]
+    - aspect_embedding: [batch, aspect_dim]
+    
+    輸出：
+    - context_vector: [batch, hidden_dim]
+    - attention_weights: [batch, seq_len] (用於視覺化)
+    """
+2. PMAC Module (pmac.py)
+pythonclass PMAC(nn.Module):
+    """
+    Progressive Multi-Aspect Composition
+    
+    功能：
+    - 多粒度aspect表示
+    - 漸進式特徵融合
+    - 動態組合多個aspect
+    
+    輸入：
+    - aspect_features: [batch, num_aspects, feature_dim]
+    - context_vectors: [batch, num_aspects, context_dim]
+    
+    輸出：
+    - composed_representation: [batch, output_dim]
+    """
+3. IARM Module (iarm.py)
+pythonclass IARM(nn.Module):
+    """
+    Inter-Aspect Relation Modeling
+    
+    功能：
+    - 建模aspect間依賴關係
+    - 圖注意力網絡 或 Transformer式交互
+    - 關係增強的aspect表示
+    
+    輸入：
+    - aspect_representations: [batch, num_aspects, dim]
+    
+    輸出：
+    - relation_enhanced_aspects: [batch, num_aspects, dim]
+    """
+4. HMAC-Net Complete (hmac_net.py)
+pythonclass HMACNet(nn.Module):
+    """
+    完整HMAC-Net模型
+    
+    整合AAHA + PMAC + IARM
+    
+    forward流程：
+    1. Embedding
+    2. AAHA提取階層式特徵
+    3. PMAC組合多個aspect
+    4. IARM建模aspect間關係
+    5. Classifier輸出情感類別
+    """
+
+四、實驗流程設計
+實驗1: Baseline比較 (compare_baselines.py)
+比較對象：
+- LSTM
+- ATAE-LSTM
+- IAN
+- Sentic GCN (optional)
+- HMAC-Net
+
+輸出：
+- 性能比較表 (Accuracy & F1)
+- 訓練曲線對比圖
+- 統計顯著性檢驗結果
+"""
+實驗2: 消融實驗 (ablation_study.py)
+消融變體：
+1. HMAC-Net (完整版)
+2. w/o AAHA (單層attention)
+3. w/o PMAC (簡單平均)
+4. w/o IARM (獨立處理)
+5. w/o 階層式設計 (flat architecture)
+
+輸出：
+- 各變體性能對比
+- 每個模組的貢獻度分析
+"""
+實驗3: 主要訓練 (train.py)
+訓練配置：
+- 優化器: Adam
+- 學習率: 0.001 with scheduler
+- Batch size: 32
+- Epochs: 50
+- Early stopping: patience=10
+- 數據增強: dropout, label smoothing
+
+監控指標：
+- Training/Validation Loss
+- Accuracy, Macro-F1
+- 每個類別的Precision/Recall
+"""
+
+五、數據處理流程
+preprocessor.py 核心功能
+1. 載入SemEval-2014數據
+   - Restaurant: ~3,000 samples
+   - Laptop: ~3,000 samples
+
+2. 文本處理
+   - Tokenization
+   - 構建詞彙表
+   - Padding/Truncation
+   
+3. Aspect處理
+   - 提取aspect terms
+   - 創建aspect masks
+   - Aspect embedding初始化
+
+4. 標籤編碼
+   - Positive: 2
+   - Neutral: 1
+   - Negative: 0
+
+5. 劃分訓練/驗證/測試集
+   - Train: 70%
+   - Val: 15%
+   - Test: 15%
+"""
+
+六、評估指標 (metrics.py)
+主要指標：
+1. Accuracy: 整體準確率
+2. Macro-F1: 類別平衡的F1
+3. Precision/Recall per class
+4. Confusion Matrix
+
+統計檢驗：
+- Paired t-test
+- Wilcoxon signed-rank test
+- Bootstrap confidence intervals
+"""
+
+七、配置文件範例
+model_config.yaml
+yamlmodel:
+  embedding_dim: 300
+  hidden_dim: 256
+  num_layers: 2
+  dropout: 0.5
+  
+aaha:
+  word_attention_dim: 128
+  phrase_attention_dim: 128
+  sentence_attention_dim: 128
+  
+pmac:
+  composition_layers: 2
+  fusion_method: "gated"
+  
+iarm:
+  relation_type: "graph_attention"
+  num_heads: 4
+```
+
+---
+
+八、關鍵輸出
+results/reports/ 將包含
+1. `baseline_comparison.csv` - 模型性能對比表
+2. `ablation_results.csv` - 消融實驗結果
+3. `attention_visualization.png` - 注意力權重視覺化
+4. `confusion_matrix.png` - 混淆矩陣
+5. `training_curves.png` - 訓練/驗證曲線
+6. `statistical_significance.txt` - 統計檢驗報告
+
+九、數據集
+第一階段包含有含"面向"等級的，seneval 含有面向的所有可能數據集，在配置文件中使用路徑編碼來支援數據
+第二階段包含所有各類評論，imdb、amazon、hotel、twitter等等不管面向級別或者句子級別。

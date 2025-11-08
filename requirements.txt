@@ -1,0 +1,32 @@
+# 深度學習框架
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# 數據處理
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# 視覺化
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# 配置管理
+PyYAML>=6.0
+
+# 進度條
+tqdm>=4.65.0
+
+# 自然語言處理
+nltk>=3.8.0
+spacy>=3.5.0
+transformers>=4.30.0  # BERT 和其他預訓練模型
+
+# 工具庫
+scipy>=1.10.0
+tensorboard>=2.13.0
+
+# 其他依賴
+h5py>=3.8.0
+pillow>=9.5.0

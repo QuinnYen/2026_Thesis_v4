@@ -1,0 +1,5 @@
+/.claude
+/.venv
+/data
+/results/checkpoints
+/results/logs
