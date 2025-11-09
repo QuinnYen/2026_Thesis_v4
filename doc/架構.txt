@@ -261,3 +261,8 @@ results/reports/ 將包含
 九、數據集
 第一階段包含有含"面向"等級的，seneval 含有面向的所有可能數據集，在配置文件中使用路徑編碼來支援數據
 第二階段包含所有各類評論，imdb、amazon、hotel、twitter等等不管面向級別或者句子級別。
+
+
+開發註記
+models/aaha.py	📁 保留	舊版代碼保留作為參考
+models/aaha_enhanced.py	✅ 使用中	新版增強模組

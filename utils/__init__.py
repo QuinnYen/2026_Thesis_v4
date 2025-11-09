@@ -7,6 +7,15 @@ from .metrics import MetricsCalculator, StatisticalTester, RunningMetrics, compa
 from .preprocessor import SemEvalPreprocessor, load_semeval_2014, split_train_val
 from .data_loader import ABSADataset, create_data_loader, load_glove_embeddings
 from .visualization import AttentionVisualizer, TrainingVisualizer, MetricsVisualizer
+from .losses import FocalLoss, ClassBalancedLoss, LabelSmoothingCrossEntropy, get_loss_function
+from .training_utils import (
+    WarmupCosineAnnealingLR,
+    WarmupLinearScheduler,
+    EmbeddingMixup,
+    ManifoldMixup,
+    AdversarialTraining,
+    get_scheduler
+)
 
 __all__ = [
     'Logger',
@@ -24,5 +33,15 @@ __all__ = [
     'load_glove_embeddings',
     'AttentionVisualizer',
     'TrainingVisualizer',
-    'MetricsVisualizer'
+    'MetricsVisualizer',
+    'FocalLoss',
+    'ClassBalancedLoss',
+    'LabelSmoothingCrossEntropy',
+    'get_loss_function',
+    'WarmupCosineAnnealingLR',
+    'WarmupLinearScheduler',
+    'EmbeddingMixup',
+    'ManifoldMixup',
+    'AdversarialTraining',
+    'get_scheduler'
 ]

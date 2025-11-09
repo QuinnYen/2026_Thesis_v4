@@ -13,9 +13,9 @@ import sys
 sys.path.append('..')
 
 from models.base_model import BaseModel, EmbeddingLayer, MLP
-from models.aaha import AAHA
-from models.pmac import PMAC
-from models.iarm import IARM
+from models.aaha_enhanced import AAHAEnhanced
+from models.pmac_enhanced import PMACEnhanced
+from models.iarm_enhanced import IARMEnhanced
 
 
 class HMACNet(BaseModel):
@@ -95,34 +95,40 @@ class HMACNet(BaseModel):
             dropout=dropout if num_layers > 1 else 0
         )
 
-        # 3. AAHA 模組（階層式注意力）
-        self.aaha = AAHA(
+        # 3. AAHA 模組（階層式注意力 - 增強版）
+        self.aaha = AAHAEnhanced(
             hidden_dim=hidden_dim,
             aspect_dim=hidden_dim,  # 面向也用 LSTM 編碼
-            word_attention_dim=word_attention_dim,
-            phrase_attention_dim=phrase_attention_dim,
-            sentence_attention_dim=sentence_attention_dim,
-            dropout=dropout
+            word_attention_dims=[64, 128],
+            phrase_attention_dims=[64, 128, 256],
+            sentence_attention_dims=[64, 128, 256],
+            attention_dropout=0.1,
+            output_dropout=dropout
         )
 
-        # 4. PMAC 模組（多面向組合）
-        self.pmac = PMAC(
+        # 4. PMAC 模組（多面向組合 - 增強版）
+        self.pmac = PMACEnhanced(
             input_dim=hidden_dim,
             fusion_dim=fusion_dim,
             num_composition_layers=num_composition_layers,
-            fusion_method=fusion_method,
-            dropout=dropout
+            hidden_dim=128,
+            dropout=dropout,
+            use_aspect_bn=True,
+            num_aspects=3,
+            progressive_training=False
         )
 
-        # 5. IARM 模組（面向間關係建模） - 可選
+        # 5. IARM 模組（面向間關係建模 - 增強版） - 可選
         if use_iarm:
-            self.iarm = IARM(
+            self.iarm = IARMEnhanced(
                 input_dim=fusion_dim,
                 relation_dim=relation_dim,
-                relation_type=relation_type,
                 num_heads=num_heads,
                 num_layers=2,
-                dropout=dropout
+                dropout=dropout,
+                use_edge_features=True,
+                use_relation_pooling=True,
+                pooling_heads=4
             )
 
         # 6. 分類器
@@ -256,11 +262,11 @@ class HMACNet(BaseModel):
         composed_repr = self.pmac(context_vector)  # [batch, fusion_dim]
 
         # 5. IARM 模組（面向間關係）- 可選
-        iarm_attention = None
+        iarm_info = None
         if self.use_iarm:
             # 將單個面向擴展為 [batch, 1, fusion_dim]
             aspect_repr = composed_repr.unsqueeze(1)
-            enhanced_repr, iarm_attention = self.iarm(aspect_repr)
+            enhanced_repr, iarm_info = self.iarm(aspect_repr)
             # 取回 [batch, fusion_dim]
             final_repr = enhanced_repr.squeeze(1)
         else:
@@ -273,7 +279,7 @@ class HMACNet(BaseModel):
         if return_attention:
             attention_weights = {
                 'aaha': aaha_attention,
-                'iarm': iarm_attention
+                'iarm': iarm_info
             }
             return logits, attention_weights
         else:

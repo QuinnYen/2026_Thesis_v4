@@ -8,6 +8,13 @@ training:
   weight_decay: 0.0001      # L2 正則化係數
   grad_clip: 5.0            # 梯度裁剪閾值
 
+  # 損失函數設定
+  loss:
+    type: "focal"           # 損失函數類型: "focal", "ce", "weighted_ce"
+    gamma: 2.0              # Focal Loss 的 gamma 參數（越大越關注難樣本）
+    class_weights: [1.0, 2.5, 1.0]  # 類別權重 [負面, 中性, 正面]（中性給予更高權重）
+    use_class_weights: true # 是否使用類別權重
+
   # 優化器設定
   optimizer:
     type: "adam"            # 優化器類型: "adam", "adamw", "sgd"
@@ -17,22 +24,29 @@ training:
 
   # 學習率調度器
   scheduler:
-    type: "reduce_on_plateau"  # 調度器類型: "reduce_on_plateau", "cosine", "step"
-    factor: 0.5                 # 學習率衰減因子
-    patience: 5                 # 等待輪數
+    type: "cosine"              # 調度器類型: "cosine", "reduce_on_plateau", "linear"
+    warmup_epochs: 2            # Warm-up 輪數（前 2 個 epochs 線性增長）
     min_lr: 1.0e-6              # 最小學習率
+    # ReduceLROnPlateau 參數（當 type="reduce_on_plateau" 時使用）
+    factor: 0.5                 # 學習率衰減因子
+    patience: 3                 # 等待輪數
 
   # Early Stopping
   early_stopping:
     enabled: true           # 是否啟用
-    patience: 10            # 容忍輪數
+    patience: 5             # 容忍輪數（降低以更早停止過擬合）
     metric: "macro_f1"      # 監控指標: "accuracy", "macro_f1", "loss"
     mode: "max"             # 模式: "max" 或 "min"
 
   # 資料增強
   augmentation:
     label_smoothing: 0.1    # 標籤平滑化
-    mixup_alpha: 0.0        # Mixup 參數（0表示不使用）
+    mixup_alpha: 0.2        # Mixup 參數（0表示不使用，推薦 0.2）
+    mixup_enabled: false    # 是否啟用 Mixup（需要模型架構支持，暫時禁用）
+    adversarial_training:   # 對抗訓練
+      enabled: false        # 是否啟用（可選，會增加訓練時間）
+      epsilon: 1.0          # 擾動幅度
+      method: "fgm"         # 方法: "fgm" 或 "pgd"
 
 # 驗證參數
 validation:

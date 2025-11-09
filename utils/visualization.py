@@ -167,6 +167,115 @@ class AttentionVisualizer:
 
         plt.close()
 
+    def plot_multi_scale_attention(
+        self,
+        attention_weights_list: List[np.ndarray],
+        scale_names: List[str],
+        words: List[str],
+        aspect: str,
+        true_label: str,
+        pred_label: str,
+        save_name: Optional[str] = None
+    ):
+        """
+        繪製多尺度注意力（支援同一層級的多個尺度）
+
+        參數:
+            attention_weights_list: 注意力權重列表 [scale1, scale2, ...]
+            scale_names: 尺度名稱列表 ['64d', '128d', '256d']
+            words: 詞列表
+            aspect: 面向詞
+            true_label: 真實標籤
+            pred_label: 預測標籤
+            save_name: 保存檔案名稱
+        """
+        num_scales = len(attention_weights_list)
+        fig, axes = plt.subplots(num_scales, 1, figsize=(16, 3 * num_scales))
+
+        if num_scales == 1:
+            axes = [axes]
+
+        for idx, (attn, scale_name) in enumerate(zip(attention_weights_list, scale_names)):
+            # 繪製熱圖
+            sns.heatmap(
+                attn.reshape(1, -1),
+                xticklabels=words,
+                yticklabels=[scale_name],
+                cmap='YlOrRd',
+                cbar=True,
+                ax=axes[idx],
+                cbar_kws={'label': '注意力權重'}
+            )
+
+            # 設置標題
+            if idx == 0:
+                axes[idx].set_title(
+                    f'多尺度注意力 - Aspect: {aspect} | 真實: {true_label} | 預測: {pred_label}',
+                    fontsize=12,
+                    pad=10
+                )
+
+            axes[idx].set_xlabel('')
+            axes[idx].tick_params(axis='x', rotation=45)
+
+        plt.tight_layout()
+
+        if save_name:
+            save_path = self.save_dir / save_name
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"多尺度注意力圖已保存: {save_path}")
+
+        plt.close()
+
+    def plot_attention_comparison(
+        self,
+        attention_dict: Dict[str, np.ndarray],
+        words: List[str],
+        aspect: str,
+        save_name: Optional[str] = None
+    ):
+        """
+        繪製不同類型注意力的對比圖
+
+        參數:
+            attention_dict: 注意力字典 {'詞級': attn1, '片語級': attn2, ...}
+            words: 詞列表
+            aspect: 面向詞
+            save_name: 保存檔案名稱
+        """
+        num_types = len(attention_dict)
+        fig, axes = plt.subplots(num_types, 1, figsize=(14, 3 * num_types))
+
+        if num_types == 1:
+            axes = [axes]
+
+        color_maps = ['Blues', 'Greens', 'Oranges', 'Reds', 'Purples']
+
+        for idx, (attn_name, attn_weights) in enumerate(attention_dict.items()):
+            cmap = color_maps[idx % len(color_maps)]
+
+            sns.heatmap(
+                attn_weights.reshape(1, -1),
+                xticklabels=words,
+                yticklabels=[attn_name],
+                cmap=cmap,
+                cbar=True,
+                ax=axes[idx]
+            )
+
+            axes[idx].set_title(f'{attn_name}注意力', fontsize=11)
+            axes[idx].tick_params(axis='x', rotation=45)
+
+        plt.suptitle(f'注意力機制對比 (Aspect: {aspect})', fontsize=14, y=1.02)
+        plt.tight_layout()
+
+        if save_name:
+            save_path = self.save_dir / save_name
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"注意力對比圖已保存: {save_path}")
+
+        plt.close()
+
 
 class TrainingVisualizer:
     """
