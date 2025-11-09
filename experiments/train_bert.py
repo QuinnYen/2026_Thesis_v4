@@ -290,6 +290,7 @@ class Trainer:
         # 最佳模型的預測結果（用於最終繪製混淆矩陣）
         self.best_val_labels = None
         self.best_val_preds = None
+        self.best_epoch = 0
 
     def train_epoch(self, epoch):
         """訓練一個 epoch"""
@@ -411,6 +412,7 @@ class Trainer:
             # 保存最佳模型
             if val_metrics['macro_f1'] > self.best_val_f1:
                 self.best_val_f1 = val_metrics['macro_f1']
+                self.best_epoch = epoch
                 self.patience_counter = 0
 
                 save_path = self.project_root / 'results' / 'checkpoints' / f"hmac_bert_best_f1_{self.best_val_f1:.4f}.pt"
@@ -461,6 +463,105 @@ class Trainer:
                 save_name='confusion_matrix_best_model.png'
             )
             self.logger.info("[OK] 混淆矩陣已保存")
+
+        # 生成訓練報告 txt
+        self._generate_training_report()
+
+    def _generate_training_report(self):
+        """生成詳細的訓練報告（txt 格式）"""
+        report_path = self.project_root / 'results' / 'reports' / 'training_report.txt'
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write("HMAC-Net with BERT 訓練報告\n")
+            f.write("=" * 80 + "\n\n")
+
+            # 基本資訊
+            f.write("【訓練配置】\n")
+            f.write(f"  模型架構: HMAC-Net with BERT\n")
+            f.write(f"  BERT 模型: {self.config.get('model', {}).get('bert_model_name', 'bert-base-uncased')}\n")
+            f.write(f"  設備: {self.device}\n")
+            f.write(f"  批次大小: {self.train_loader.batch_size}\n")
+            f.write(f"  學習率: {self.optimizer.param_groups[0]['lr']}\n")
+            f.write(f"  優化器: {self.optimizer.__class__.__name__}\n")
+            f.write(f"\n")
+
+            # 訓練結果
+            f.write("【訓練結果】\n")
+            f.write(f"  總訓練輪數: {len(self.history['train_loss'])}\n")
+            f.write(f"  最佳驗證 F1: {self.best_val_f1:.4f}\n")
+            f.write(f"  最佳模型出現於: Epoch {self.best_epoch}\n")
+            f.write(f"\n")
+
+            # 最終指標
+            if len(self.history['train_loss']) > 0:
+                last_idx = -1
+                f.write("【最終訓練指標】\n")
+                f.write(f"  訓練損失: {self.history['train_loss'][last_idx]:.4f}\n")
+                f.write(f"  訓練準確率: {self.history['train_accuracy'][last_idx]:.4f}\n")
+                f.write(f"  訓練 Macro F1: {self.history['train_macro_f1'][last_idx]:.4f}\n")
+                f.write(f"\n")
+
+                f.write("【最終驗證指標】\n")
+                f.write(f"  驗證損失: {self.history['val_loss'][last_idx]:.4f}\n")
+                f.write(f"  驗證準確率: {self.history['val_accuracy'][last_idx]:.4f}\n")
+                f.write(f"  驗證 Macro F1: {self.history['val_macro_f1'][last_idx]:.4f}\n")
+                f.write(f"\n")
+
+            # 最佳模型的詳細指標
+            if self.best_val_labels is not None and self.best_val_preds is not None:
+                f.write("【最佳模型詳細指標】\n")
+                metrics = self.metrics_calculator.calculate_all(
+                    np.array(self.best_val_labels), np.array(self.best_val_preds)
+                )
+                f.write(f"  準確率 (Accuracy): {metrics['accuracy']:.4f}\n")
+                f.write(f"  Macro F1: {metrics['macro_f1']:.4f}\n")
+                f.write(f"  Macro Precision: {metrics['macro_precision']:.4f}\n")
+                f.write(f"  Macro Recall: {metrics['macro_recall']:.4f}\n")
+                f.write(f"\n")
+
+                # 各類別指標
+                f.write("【各類別表現】\n")
+                class_names = ['負面', '中性', '正面']
+                for class_name in class_names:
+                    precision = metrics.get(f'{class_name}_precision', 0.0)
+                    recall = metrics.get(f'{class_name}_recall', 0.0)
+                    f1 = metrics.get(f'{class_name}_f1', 0.0)
+                    support = metrics.get(f'{class_name}_support', 0)
+                    f.write(f"  {class_name}:\n")
+                    f.write(f"    Precision: {precision:.4f}\n")
+                    f.write(f"    Recall: {recall:.4f}\n")
+                    f.write(f"    F1-Score: {f1:.4f}\n")
+                    f.write(f"    Support: {int(support)}\n")
+                f.write(f"\n")
+
+                # 混淆矩陣
+                cm = self.metrics_calculator.get_confusion_matrix(
+                    self.best_val_labels, self.best_val_preds
+                )
+                f.write("【混淆矩陣】\n")
+                f.write("         預測→   負面   中性   正面\n")
+                f.write("  實際↓\n")
+                for i, class_name in enumerate(class_names):
+                    f.write(f"  {class_name:4s}         {cm[i][0]:5d}  {cm[i][1]:5d}  {cm[i][2]:5d}\n")
+                f.write(f"\n")
+
+            # 訓練歷史
+            f.write("【訓練歷史】\n")
+            f.write(f"{'Epoch':>6} {'Train Loss':>12} {'Val Loss':>12} {'Train F1':>12} {'Val F1':>12}\n")
+            f.write("-" * 60 + "\n")
+            for i in range(len(self.history['train_loss'])):
+                f.write(f"{i+1:6d} {self.history['train_loss'][i]:12.4f} "
+                       f"{self.history['val_loss'][i]:12.4f} "
+                       f"{self.history['train_macro_f1'][i]:12.4f} "
+                       f"{self.history['val_macro_f1'][i]:12.4f}\n")
+
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("報告生成時間: " + pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S") + "\n")
+            f.write("=" * 80 + "\n")
+
+        self.logger.info(f"[OK] 訓練報告已保存: {report_path}")
 
 
 def main():

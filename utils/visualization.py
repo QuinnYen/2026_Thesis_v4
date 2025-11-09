@@ -101,7 +101,6 @@ class AttentionVisualizer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"注意力圖已保存: {save_path}")
 
-        plt.show()
         plt.close()
 
     def plot_hierarchical_attention(
@@ -166,7 +165,6 @@ class AttentionVisualizer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"階層式注意力圖已保存: {save_path}")
 
-        plt.show()
         plt.close()
 
 
@@ -238,7 +236,6 @@ class TrainingVisualizer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"訓練曲線已保存: {save_path}")
 
-        plt.show()
         plt.close()
 
     def plot_learning_rate(
@@ -269,7 +266,6 @@ class TrainingVisualizer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"學習率曲線已保存: {save_path}")
 
-        plt.show()
         plt.close()
 
 
@@ -340,7 +336,6 @@ class MetricsVisualizer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"混淆矩陣已保存: {save_path}")
 
-        plt.show()
         plt.close()
 
     def plot_model_comparison(
@@ -393,7 +388,6 @@ class MetricsVisualizer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"模型比較圖已保存: {save_path}")
 
-        plt.show()
         plt.close()
 
     def plot_ablation_study(
@@ -440,7 +434,6 @@ class MetricsVisualizer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"消融實驗圖已保存: {save_path}")
 
-        plt.show()
         plt.close()
 
 
