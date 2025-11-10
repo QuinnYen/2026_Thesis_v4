@@ -1,12 +1,13 @@
 """
 BERT 嵌入層
 提供動態 BERT 嵌入，替代靜態 GloVe
+支持 BERT 和 DistilBERT
 """
 
 import torch
 import torch.nn as nn
 from typing import Tuple, Optional
-from transformers import BertModel, BertTokenizer
+from transformers import BertModel, BertTokenizer, DistilBertModel, DistilBertTokenizer, AutoModel, AutoTokenizer
 
 
 class BERTEmbedding(nn.Module):
@@ -39,21 +40,55 @@ class BERTEmbedding(nn.Module):
         self.model_name = model_name
         self.pooling = pooling
 
-        # 載入 BERT 模型和分詞器
-        print(f"載入 BERT 模型: {model_name}")
-        self.bert = BertModel.from_pretrained(model_name)
-        self.tokenizer = BertTokenizer.from_pretrained(model_name)
+        # 檢測模型類型
+        self.is_distilbert = 'distilbert' in model_name.lower()
+
+        # 載入模型和分詞器（使用 AutoModel 自動識別）
+        print(f"載入模型: {model_name}")
+        if self.is_distilbert:
+            self.bert = DistilBertModel.from_pretrained(model_name)
+            self.tokenizer = DistilBertTokenizer.from_pretrained(model_name)
+            print("  類型: DistilBERT (輕量級)")
+        else:
+            self.bert = BertModel.from_pretrained(model_name)
+            self.tokenizer = BertTokenizer.from_pretrained(model_name)
+            print("  類型: BERT")
 
         # 獲取隱藏層大小
         self.hidden_size = self.bert.config.hidden_size
+        print(f"  隱藏層維度: {self.hidden_size}")
 
-        # 凍結參數
+        # 凍結參數策略
         if freeze:
-            for param in self.bert.parameters():
+            # 獲取總層數
+            if self.is_distilbert:
+                num_layers = self.bert.config.n_layers  # DistilBERT 有 6 層
+                last_layers = 2  # 訓練最後 2 層
+            else:
+                num_layers = self.bert.config.num_hidden_layers  # BERT 有 12 層
+                last_layers = 2  # 訓練最後 2 層
+
+            # 凍結除了最後幾層的所有層
+            for name, param in self.bert.named_parameters():
                 param.requires_grad = False
-            print("BERT 參數已凍結")
+
+                # 訓練最後幾層
+                for layer_idx in range(num_layers - last_layers, num_layers):
+                    if f"layer.{layer_idx}" in name or f"transformer.layer.{layer_idx}" in name:
+                        param.requires_grad = True
+
+                # BERT 的 pooler（DistilBERT 沒有）
+                if not self.is_distilbert and "pooler" in name:
+                    param.requires_grad = True
+
+            # 計算可訓練參數數量
+            trainable_params = sum(p.numel() for p in self.bert.parameters() if p.requires_grad)
+            total_params = sum(p.numel() for p in self.bert.parameters())
+            print(f"  部分凍結: 可訓練參數 {trainable_params:,} / 總參數 {total_params:,}")
+            print(f"  可訓練比例: {trainable_params/total_params*100:.1f}%")
         else:
-            print("BERT 參數可訓練（微調模式）")
+            total_params = sum(p.numel() for p in self.bert.parameters())
+            print(f"  完全可訓練: {total_params:,} 參數（微調模式）")
 
     def forward(
         self,

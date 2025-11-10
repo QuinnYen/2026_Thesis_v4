@@ -39,7 +39,8 @@ from utils import (
     get_loss_function,
     get_scheduler,
     EmbeddingMixup,
-    AdversarialTraining
+    AdversarialTraining,
+    BalancedBatchSampler
 )
 import pandas as pd
 
@@ -268,7 +269,7 @@ def collate_fn_bert(batch):
 class Trainer:
     """訓練器"""
 
-    def __init__(self, model, train_loader, val_loader, test_loader, optimizer, criterion, device, logger, config, project_root=None):
+    def __init__(self, model, train_loader, val_loader, test_loader, optimizer, criterion, device, logger, config, project_root=None, batch_size=None):
         self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -279,6 +280,10 @@ class Trainer:
         self.logger = logger
         self.config = config
         self.project_root = project_root if project_root else Path.cwd()
+
+        # 保存訓練配置信息
+        self.batch_size = batch_size  # 保存實際批次大小
+        self.initial_lr = optimizer.param_groups[0]['lr']  # 保存初始學習率
 
         # Early Stopping
         self.patience = config['training']['early_stopping']['patience']
@@ -375,7 +380,10 @@ class Trainer:
             # 反向傳播
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
+
+            # 梯度裁剪 (設置為 5.0 給予模型更多學習空間)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
+
             self.optimizer.step()
 
             # 記錄指標
@@ -691,14 +699,15 @@ class Trainer:
                 if samples_collected >= num_samples:
                     break
 
-                text_ids = batch['text_ids'].to(self.device)
-                aspect_ids = batch['aspect_ids'].to(self.device)
-                text_mask = batch['text_mask'].to(self.device)
-                labels = batch['label']
+                text_ids = batch['text_input_ids'].to(self.device)
+                aspect_ids = batch['aspect_input_ids'].to(self.device)
+                text_mask = batch['text_attention_mask'].to(self.device)
+                aspect_mask = batch['aspect_attention_mask'].to(self.device)
+                labels = batch['labels']
 
                 # 前向傳播並獲取注意力權重
                 logits, attention_dict = self.model(
-                    text_ids, aspect_ids, text_mask,
+                    text_ids, text_mask, aspect_ids, aspect_mask,
                     return_attention=True
                 )
 
@@ -813,8 +822,9 @@ class Trainer:
             f.write(f"  模型架構: HMAC-Net with BERT\n")
             f.write(f"  BERT 模型: {self.config.get('model', {}).get('bert_model_name', 'bert-base-uncased')}\n")
             f.write(f"  設備: {self.device}\n")
-            f.write(f"  批次大小: {self.train_loader.batch_size}\n")
-            f.write(f"  學習率: {self.optimizer.param_groups[0]['lr']}\n")
+            f.write(f"  批次大小: {self.batch_size if self.batch_size else self.train_loader.batch_size}\n")
+            f.write(f"  初始學習率: {self.initial_lr}\n")
+            f.write(f"  最終學習率: {self.optimizer.param_groups[0]['lr']}\n")
             f.write(f"  優化器: {self.optimizer.__class__.__name__}\n")
             f.write(f"\n")
 
@@ -948,16 +958,16 @@ def main():
     parser = argparse.ArgumentParser(description='訓練 HMAC-Net with BERT')
     parser.add_argument('--domain', type=str, default='restaurant', choices=['restaurant', 'laptop'],
                         help='數據集領域')
-    parser.add_argument('--bert_model', type=str, default='bert-base-uncased',
-                        help='BERT 模型名稱')
+    parser.add_argument('--bert_model', type=str, default='distilbert-base-uncased',
+                        help='BERT 模型名稱（支持 bert-base-uncased, distilbert-base-uncased）')
     parser.add_argument('--freeze_bert', action='store_true',
                         help='是否凍結 BERT 參數')
-    parser.add_argument('--batch_size', type=int, default=16,
-                        help='批次大小')
-    parser.add_argument('--epochs', type=int, default=20,
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help='批次大小（至少32以確保訓練穩定）')
+    parser.add_argument('--epochs', type=int, default=25,
                         help='訓練輪數')
     parser.add_argument('--lr', type=float, default=2e-5,
-                        help='學習率')
+                        help='學習率（DistilBERT 推薦 2e-5）')
     args = parser.parse_args()
 
     # 獲取專案根目錄
@@ -1043,11 +1053,20 @@ def main():
     # 從訓練集劃分出驗證集（85% 訓練，15% 驗證）
     train_df, val_df = split_train_val(train_df, val_ratio=0.15, stratify=True)
 
+    # 驗證數據集無重疊（防止數據洩漏）
+    train_indices = set(train_df.index)
+    val_indices = set(val_df.index)
+    overlap = train_indices.intersection(val_indices)
+
+    if len(overlap) > 0:
+        raise ValueError(f"數據洩漏！訓練集和驗證集有 {len(overlap)} 個重疊樣本")
+
     logger.info(f"\n數據集劃分:")
     logger.info(f"  訓練集: {len(train_df)} 樣本")
     logger.info(f"  驗證集: {len(val_df)} 樣本 (從訓練集劃分)")
     logger.info(f"  測試集: {len(test_df)} 樣本 (官方 Gold 標準)")
     logger.info(f"  總計: {len(train_df) + len(val_df) + len(test_df)} 樣本")
+    logger.info(f"  ✓ 已驗證：訓練集和驗證集無重疊")
 
     # 打印統計
     preprocessor.print_statistics(train_df)
@@ -1065,10 +1084,45 @@ def main():
     use_pin_memory = torch.cuda.is_available()
     num_workers = 0  # Windows 最佳設定
 
+    # 使用 WeightedRandomSampler 平衡類別但不過度採樣
+    train_labels = train_df['label'].tolist()
+
+    # 計算每個類別的樣本數
+    class_counts = [0, 0, 0]  # [負面, 中性, 正面]
+    for label in train_labels:
+        class_counts[label] += 1
+
+    logger.info(f"[*] 類別分布:")
+    logger.info(f"    負面: {class_counts[0]}")
+    logger.info(f"    中性: {class_counts[1]}")
+    logger.info(f"    正面: {class_counts[2]}")
+
+    # 計算每個樣本的權重（反比於類別頻率）
+    class_weights = 1.0 / torch.tensor(class_counts, dtype=torch.float)
+    sample_weights = class_weights[train_labels]
+
+    # 創建 WeightedRandomSampler
+    from torch.utils.data import WeightedRandomSampler
+    weighted_sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(train_labels),  # 不過度採樣，保持原始數據集大小
+        replacement=True,  # 允許重複採樣以平衡類別
+        generator=torch.Generator().manual_seed(42)  # 固定種子以確保可重現性
+    )
+
+    logger.info(f"[*] 使用 WeightedRandomSampler:")
+    logger.info(f"    批次大小: {args.batch_size}")
+    logger.info(f"    每個 epoch 樣本數: {len(train_labels)}")
+    logger.info(f"    總批次數: {len(train_labels) // args.batch_size}")
+
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True,
-        collate_fn=collate_fn_bert, num_workers=num_workers,
-        pin_memory=use_pin_memory, persistent_workers=False
+        train_dataset,
+        batch_size=args.batch_size,
+        sampler=weighted_sampler,
+        collate_fn=collate_fn_bert,
+        num_workers=num_workers,
+        pin_memory=use_pin_memory,
+        persistent_workers=False
     )
 
     val_loader = torch.utils.data.DataLoader(
@@ -1093,7 +1147,7 @@ def main():
         freeze_bert=args.freeze_bert,
         hidden_dim=256,
         num_classes=3,
-        dropout=0.5,  # 增加 dropout 以防止過擬合
+        dropout=0.3,
         use_iarm=True,
         relation_type='transformer'
     ).to(device)
@@ -1101,7 +1155,7 @@ def main():
     model.print_model_summary()
 
     # ==================== 訓練 ====================
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)  # 增加 L2 正則化
 
     # 創建損失函數（Focal Loss + 類別權重 + Label Smoothing）
     loss_config = config['training']['loss']
@@ -1126,7 +1180,7 @@ def main():
 
     trainer = Trainer(
         model, train_loader, val_loader, test_loader, optimizer, criterion,
-        device, logger, config, project_root=project_root
+        device, logger, config, project_root=project_root, batch_size=args.batch_size
     )
     trainer.train(num_epochs=args.epochs)
 

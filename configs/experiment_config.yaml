@@ -4,15 +4,15 @@
 training:
   batch_size: 32            # 批次大小
   num_epochs: 50            # 訓練輪數
-  learning_rate: 0.001      # 初始學習率
-  weight_decay: 0.0001      # L2 正則化係數
-  grad_clip: 5.0            # 梯度裁剪閾值
+  learning_rate: 2e-5       # 初始學習率（BERT 微調最佳範圍）
+  weight_decay: 0.01        # L2 正則化係數（AdamW 標準值）
+  grad_clip: 5.0            # 梯度裁剪閾值（放寬以允許更多學習）
 
   # 損失函數設定
   loss:
     type: "focal"           # 損失函數類型: "focal", "ce", "weighted_ce"
-    gamma: 2.0              # Focal Loss 的 gamma 參數（越大越關注難樣本）
-    class_weights: [1.0, 2.5, 1.0]  # 類別權重 [負面, 中性, 正面]（中性給予更高權重）
+    gamma: 1.5              # Focal Loss 的 gamma 參數（降低避免過度關注難樣本）
+    class_weights: [1.5, 2.0, 1.5]  # 類別權重 [負面, 中性, 正面]（平衡三個類別）
     use_class_weights: true # 是否使用類別權重
 
   # 優化器設定
@@ -25,8 +25,8 @@ training:
   # 學習率調度器
   scheduler:
     type: "cosine"              # 調度器類型: "cosine", "reduce_on_plateau", "linear"
-    warmup_epochs: 2            # Warm-up 輪數（前 2 個 epochs 線性增長）
-    min_lr: 1.0e-6              # 最小學習率
+    warmup_epochs: 3            # Warm-up 輪數（增加到 3 個 epochs 更平滑）
+    min_lr: 1.0e-6              # 最小學習率（與初始學習率 2e-5 保持合理比例）
     # ReduceLROnPlateau 參數（當 type="reduce_on_plateau" 時使用）
     factor: 0.5                 # 學習率衰減因子
     patience: 3                 # 等待輪數
@@ -34,7 +34,7 @@ training:
   # Early Stopping
   early_stopping:
     enabled: true           # 是否啟用
-    patience: 5             # 容忍輪數（降低以更早停止過擬合）
+    patience: 10            # 容忍輪數（增加以允許更多探索）
     metric: "macro_f1"      # 監控指標: "accuracy", "macro_f1", "loss"
     mode: "max"             # 模式: "max" 或 "min"
 

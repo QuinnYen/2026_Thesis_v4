@@ -693,3 +693,320 @@ if __name__ == "__main__":
     print(f"  對比損失: {loss.item():.4f}")
 
     print("\nIARMEnhanced 模組測試完成！")
+
+
+# ============================================================================
+# Multi-Aspect IARM (真正的面向間關係建模)
+# ============================================================================
+
+class IARMMultiAspect(nn.Module):
+    """
+    Multi-Aspect Inter-Aspect Relation Modeling
+
+    真正的面向間關係建模模組
+    設計用於句子級別的多 aspect 關係學習
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        relation_dim: int = None,
+        num_heads: int = 4,
+        num_layers: int = 2,
+        dropout: float = 0.3,
+        relation_mode: str = 'transformer'  # 'transformer', 'gat', 'bilinear'
+    ):
+        """
+        初始化 Multi-Aspect IARM
+
+        參數:
+            input_dim: 輸入維度（來自 PMAC 的組合特徵）
+            relation_dim: 關係特徵維度（如果為 None，則使用 input_dim）
+            num_heads: 注意力頭數
+            num_layers: Transformer 層數
+            dropout: Dropout 比率
+            relation_mode: 關係建模模式
+                - 'transformer': 使用 Transformer encoder
+                - 'gat': 使用 Graph Attention Network
+                - 'bilinear': 使用雙線性交互
+        """
+        super(IARMMultiAspect, self).__init__()
+
+        self.input_dim = input_dim
+        self.relation_dim = relation_dim if relation_dim is not None else input_dim
+        self.num_heads = num_heads
+        self.num_layers = num_layers
+        self.relation_mode = relation_mode
+
+        # 投影層
+        if self.input_dim != self.relation_dim:
+            self.input_projection = nn.Linear(input_dim, self.relation_dim)
+        else:
+            self.input_projection = nn.Identity()
+
+        # 根據模式初始化關係建模組件
+        if relation_mode == 'transformer':
+            # Transformer Encoder
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=self.relation_dim,
+                nhead=num_heads,
+                dim_feedforward=self.relation_dim * 4,
+                dropout=dropout,
+                activation='gelu',
+                batch_first=True
+            )
+            self.transformer = nn.TransformerEncoder(
+                encoder_layer,
+                num_layers=num_layers
+            )
+
+        elif relation_mode == 'gat':
+            # Graph Attention Network layers
+            self.gat_layers = nn.ModuleList([
+                self._build_gat_layer(self.relation_dim, num_heads, dropout)
+                for _ in range(num_layers)
+            ])
+
+        elif relation_mode == 'bilinear':
+            # Bilinear interaction
+            self.bilinear_layers = nn.ModuleList([
+                nn.Bilinear(self.relation_dim, self.relation_dim, self.relation_dim)
+                for _ in range(num_layers)
+            ])
+            self.layer_norms = nn.ModuleList([
+                nn.LayerNorm(self.relation_dim)
+                for _ in range(num_layers)
+            ])
+
+        # Relation-aware pooling（可選）
+        self.relation_pooling = RelationAwarePooling(
+            input_dim=self.relation_dim,
+            num_heads=num_heads,
+            dropout=dropout
+        )
+
+        # 輸出投影
+        self.output_projection = nn.Sequential(
+            nn.Linear(self.relation_dim, self.relation_dim),
+            nn.LayerNorm(self.relation_dim),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
+
+        self.dropout = nn.Dropout(dropout)
+
+    def _build_gat_layer(self, dim: int, num_heads: int, dropout: float):
+        """構建單層 GAT"""
+        return nn.ModuleDict({
+            'attention': nn.MultiheadAttention(
+                embed_dim=dim,
+                num_heads=num_heads,
+                dropout=dropout,
+                batch_first=True
+            ),
+            'ffn': nn.Sequential(
+                nn.Linear(dim, dim * 4),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(dim * 4, dim),
+                nn.Dropout(dropout)
+            ),
+            'norm1': nn.LayerNorm(dim),
+            'norm2': nn.LayerNorm(dim)
+        })
+
+    def forward(
+        self,
+        aspect_features: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ) -> Tuple[torch.Tensor, Dict]:
+        """
+        Multi-Aspect 關係建模
+
+        參數:
+            aspect_features: [batch, num_aspects, dim]
+            aspect_mask: [batch, num_aspects] - bool mask
+
+        返回:
+            enhanced_features: [batch, num_aspects, relation_dim]
+            relation_info: 字典，包含關係信息
+        """
+        batch_size, num_aspects, _ = aspect_features.shape
+
+        # 投影
+        features = self.input_projection(aspect_features)  # [batch, N, relation_dim]
+
+        # 根據模式建模關係
+        if self.relation_mode == 'transformer':
+            enhanced, relation_info = self._transformer_relation(features, aspect_mask)
+        elif self.relation_mode == 'gat':
+            enhanced, relation_info = self._gat_relation(features, aspect_mask)
+        elif self.relation_mode == 'bilinear':
+            enhanced, relation_info = self._bilinear_relation(features, aspect_mask)
+        else:
+            raise ValueError(f"Unknown relation_mode: {self.relation_mode}")
+
+        # 輸出投影
+        output = self.output_projection(enhanced)
+
+        # 殘差連接
+        output = features + self.dropout(output)
+
+        return output, relation_info
+
+    def _transformer_relation(
+        self,
+        features: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ) -> Tuple[torch.Tensor, Dict]:
+        """
+        使用 Transformer 建模 aspect 關係
+
+        Transformer 的 self-attention 自然捕捉序列中的關係
+        """
+        # 創建 padding mask（True 表示 padding，需要被 mask）
+        # PyTorch Transformer 期望 True = padding
+        padding_mask = ~aspect_mask  # [batch, num_aspects]
+
+        # Transformer forward
+        enhanced = self.transformer(
+            features,
+            src_key_padding_mask=padding_mask
+        )  # [batch, num_aspects, dim]
+
+        # 提取關係信息（可以從最後一層的 attention 獲取）
+        relation_info = {
+            'mode': 'transformer',
+            'num_layers': self.num_layers
+        }
+
+        return enhanced, relation_info
+
+    def _gat_relation(
+        self,
+        features: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ) -> Tuple[torch.Tensor, Dict]:
+        """
+        使用 GAT 建模 aspect 關係
+
+        將 aspects 視為圖節點，建模它們之間的關係邊
+        """
+        enhanced = features
+        attention_weights_list = []
+
+        # 多層 GAT
+        for layer in self.gat_layers:
+            # Self-attention（作為圖注意力）
+            attn_output, attn_weights = layer['attention'](
+                enhanced, enhanced, enhanced,
+                key_padding_mask=~aspect_mask,
+                need_weights=True
+            )
+
+            # 殘差連接 + Norm
+            enhanced = layer['norm1'](enhanced + self.dropout(attn_output))
+
+            # FFN
+            ffn_output = layer['ffn'](enhanced)
+            enhanced = layer['norm2'](enhanced + ffn_output)
+
+            attention_weights_list.append(attn_weights)
+
+        relation_info = {
+            'mode': 'gat',
+            'attention_weights': attention_weights_list  # 可用於可視化
+        }
+
+        return enhanced, relation_info
+
+    def _bilinear_relation(
+        self,
+        features: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ) -> Tuple[torch.Tensor, Dict]:
+        """
+        使用雙線性交互建模 aspect 關係
+
+        計算每對 aspects 之間的雙線性相似度
+        """
+        batch_size, num_aspects, dim = features.shape
+        enhanced = features.clone()
+
+        for layer_idx, (bilinear, norm) in enumerate(zip(self.bilinear_layers, self.layer_norms)):
+            # 對每個樣本計算兩兩交互
+            layer_output = torch.zeros_like(features)
+
+            for b in range(batch_size):
+                valid_mask = aspect_mask[b]
+                valid_indices = torch.where(valid_mask)[0]
+                num_valid = len(valid_indices)
+
+                if num_valid <= 1:
+                    layer_output[b] = enhanced[b]
+                    continue
+
+                # 計算所有有效 aspects 的兩兩交互
+                for i, idx_i in enumerate(valid_indices):
+                    interactions = []
+
+                    for j, idx_j in enumerate(valid_indices):
+                        if i == j:
+                            continue
+
+                        # 雙線性交互
+                        interaction = bilinear(
+                            enhanced[b, idx_i].unsqueeze(0),
+                            enhanced[b, idx_j].unsqueeze(0)
+                        ).squeeze(0)
+
+                        interactions.append(interaction)
+
+                    if interactions:
+                        # 聚合交互信息
+                        aggregated = torch.stack(interactions).mean(dim=0)
+                        layer_output[b, idx_i] = aggregated
+                    else:
+                        layer_output[b, idx_i] = enhanced[b, idx_i]
+
+            # 殘差 + Norm
+            enhanced = norm(enhanced + self.dropout(layer_output))
+
+        relation_info = {
+            'mode': 'bilinear',
+            'num_layers': self.num_layers
+        }
+
+        return enhanced, relation_info
+
+    def compute_relation_matrix(
+        self,
+        aspect_features: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        計算 aspect 關係矩陣（用於可視化）
+
+        參數:
+            aspect_features: [batch, num_aspects, dim]
+            aspect_mask: [batch, num_aspects]
+
+        返回:
+            relation_matrix: [batch, num_aspects, num_aspects]
+                表示 aspects 之間的關係強度
+        """
+        batch_size, num_aspects, dim = aspect_features.shape
+
+        # 計算相似度矩陣
+        # 使用 cosine similarity 或 dot product
+        features_norm = F.normalize(aspect_features, p=2, dim=-1)
+        relation_matrix = torch.matmul(
+            features_norm,
+            features_norm.transpose(-2, -1)
+        )  # [batch, N, N]
+
+        # 應用 mask
+        mask_expanded = aspect_mask.unsqueeze(1) & aspect_mask.unsqueeze(2)
+        relation_matrix = relation_matrix.masked_fill(~mask_expanded, 0)
+
+        return relation_matrix

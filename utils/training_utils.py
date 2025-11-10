@@ -44,8 +44,8 @@ class WarmupCosineAnnealingLR(_LRScheduler):
     def get_lr(self):
         """計算當前學習率"""
         if self.last_epoch < self.warmup_epochs:
-            # Warm-up 階段：線性增長
-            alpha = self.last_epoch / self.warmup_epochs
+            # Warm-up 階段：線性增長 (修正：從 1/warmup_epochs 開始而非 0)
+            alpha = (self.last_epoch + 1) / self.warmup_epochs
             return [base_lr * alpha for base_lr in self.base_lrs]
         else:
             # Cosine Annealing 階段

@@ -16,6 +16,7 @@ from .training_utils import (
     AdversarialTraining,
     get_scheduler
 )
+from .balanced_sampler import BalancedBatchSampler, WeightedBalancedBatchSampler
 
 __all__ = [
     'Logger',
@@ -43,5 +44,7 @@ __all__ = [
     'EmbeddingMixup',
     'ManifoldMixup',
     'AdversarialTraining',
-    'get_scheduler'
+    'get_scheduler',
+    'BalancedBatchSampler',
+    'WeightedBalancedBatchSampler'
 ]

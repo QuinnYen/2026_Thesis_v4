@@ -547,3 +547,238 @@ if __name__ == "__main__":
     print("  ✅ 2. Aspect-specific Batch Normalization")
     print("  ✅ 3. Residual Connections - 防止資訊丟失")
     print("  ✅ 4. Progressive Training Support")
+
+
+# ============================================================================
+# Multi-Aspect PMAC (真正的多面向組合)
+# ============================================================================
+
+class PMACMultiAspect(nn.Module):
+    """
+    Multi-Aspect Progressive Composition
+
+    真正的多面向漸進式組合模組
+    設計用於句子級別的多 aspect 建模
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        fusion_dim: int = None,
+        num_composition_layers: int = 2,
+        hidden_dim: int = 128,
+        dropout: float = 0.3,
+        composition_mode: str = 'sequential'  # 'sequential', 'pairwise', 'attention'
+    ):
+        """
+        初始化 Multi-Aspect PMAC
+
+        參數:
+            input_dim: 輸入維度（來自 AAHA 的 context vectors）
+            fusion_dim: 融合維度（如果為 None，則使用 input_dim）
+            num_composition_layers: 組合層數
+            hidden_dim: 門控網絡隱藏維度
+            dropout: Dropout 比率
+            composition_mode: 組合模式
+                - 'sequential': 順序組合 (asp1 + asp2 -> c12, c12 + asp3 -> c123, ...)
+                - 'pairwise': 兩兩組合（每個 aspect 與其他所有 aspects 組合）
+                - 'attention': 基於注意力的組合
+        """
+        super(PMACMultiAspect, self).__init__()
+
+        self.input_dim = input_dim
+        self.fusion_dim = fusion_dim if fusion_dim is not None else input_dim
+        self.num_composition_layers = num_composition_layers
+        self.composition_mode = composition_mode
+
+        # 投影層（如果需要維度轉換）
+        if self.input_dim != self.fusion_dim:
+            self.input_projection = nn.Linear(input_dim, self.fusion_dim)
+        else:
+            self.input_projection = nn.Identity()
+
+        # 門控融合層（用於組合兩個 aspects）
+        self.gated_fusion_layers = nn.ModuleList([
+            EnhancedGatingMechanism(
+                input_dim=self.fusion_dim,
+                hidden_dim=hidden_dim,
+                dropout=dropout,
+                use_self_attention=True
+            )
+            for _ in range(num_composition_layers)
+        ])
+
+        # Attention-based 組合（如果使用 attention 模式）
+        if composition_mode == 'attention':
+            self.attention_query = nn.Linear(self.fusion_dim, self.fusion_dim)
+            self.attention_key = nn.Linear(self.fusion_dim, self.fusion_dim)
+            self.attention_value = nn.Linear(self.fusion_dim, self.fusion_dim)
+            self.scale = self.fusion_dim ** 0.5
+
+        # Layer Normalization
+        self.layer_norms = nn.ModuleList([
+            nn.LayerNorm(self.fusion_dim)
+            for _ in range(num_composition_layers)
+        ])
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        aspect_features: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Multi-Aspect 組合
+
+        參數:
+            aspect_features: [batch, num_aspects, dim]
+            aspect_mask: [batch, num_aspects] - bool mask，True 表示有效 aspect
+
+        返回:
+            composed_features: [batch, num_aspects, fusion_dim]
+        """
+        batch_size, num_aspects, _ = aspect_features.shape
+
+        # 投影
+        features = self.input_projection(aspect_features)  # [batch, N, fusion_dim]
+
+        if self.composition_mode == 'sequential':
+            return self._sequential_composition(features, aspect_mask)
+        elif self.composition_mode == 'pairwise':
+            return self._pairwise_composition(features, aspect_mask)
+        elif self.composition_mode == 'attention':
+            return self._attention_composition(features, aspect_mask)
+        else:
+            raise ValueError(f"Unknown composition_mode: {self.composition_mode}")
+
+    def _sequential_composition(
+        self,
+        features: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        順序組合: asp1 + asp2 -> c12, c12 + asp3 -> c123, ...
+
+        這是真正的「漸進式組合」- PMAC 的核心創新點！
+        """
+        batch_size, num_aspects, dim = features.shape
+
+        # 初始化輸出
+        composed_features = torch.zeros_like(features)
+
+        # 對每個樣本單獨處理（因為 aspect 數量不同）
+        for b in range(batch_size):
+            # 找到有效 aspects
+            valid_mask = aspect_mask[b]
+            valid_indices = torch.where(valid_mask)[0]
+            num_valid = len(valid_indices)
+
+            if num_valid == 0:
+                continue
+            elif num_valid == 1:
+                # 只有一個 aspect，直接複製
+                composed_features[b, valid_indices[0]] = features[b, valid_indices[0]]
+            else:
+                # 多個 aspects，漸進式組合
+                # 從第一個開始
+                composed = features[b, valid_indices[0]].clone().unsqueeze(0)  # [1, dim]
+
+                # 逐個組合後續 aspects
+                for layer_idx, gating_layer in enumerate(self.gated_fusion_layers):
+                    for i in range(1, num_valid):
+                        curr_aspect = features[b, valid_indices[i]].unsqueeze(0)  # [1, dim]
+
+                        # 門控融合
+                        composed = gating_layer(composed, curr_aspect)
+
+                        # Layer norm
+                        composed = self.layer_norms[layer_idx](composed)
+
+                # 轉回 1D
+                composed = composed.squeeze(0)  # [dim]
+
+                # 將組合結果廣播到所有有效 aspects
+                # 每個 aspect 都獲得完整的組合信息
+                for idx in valid_indices:
+                    composed_features[b, idx] = composed
+
+        return composed_features
+
+    def _pairwise_composition(
+        self,
+        features: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        兩兩組合: 每個 aspect 與其他所有 aspects 組合
+
+        這種方式可以捕捉更豐富的 aspect 交互
+        """
+        batch_size, num_aspects, dim = features.shape
+        composed_features = torch.zeros_like(features)
+
+        for b in range(batch_size):
+            valid_mask = aspect_mask[b]
+            valid_indices = torch.where(valid_mask)[0]
+            num_valid = len(valid_indices)
+
+            if num_valid <= 1:
+                # 單個或無 aspect
+                if num_valid == 1:
+                    composed_features[b, valid_indices[0]] = features[b, valid_indices[0]]
+                continue
+
+            # 對每個 aspect，與其他所有 aspects 組合
+            for i, idx_i in enumerate(valid_indices):
+                composed = features[b, idx_i].clone()
+
+                # 與其他 aspects 組合
+                for j, idx_j in enumerate(valid_indices):
+                    if i == j:
+                        continue
+
+                    other_aspect = features[b, idx_j]
+
+                    # 使用第一個門控層組合
+                    composed = self.gated_fusion_layers[0](composed, other_aspect)
+
+                composed_features[b, idx_i] = self.layer_norms[0](composed)
+
+        return composed_features
+
+    def _attention_composition(
+        self,
+        features: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        基於注意力的組合: 使用 self-attention 聚合所有 aspects
+
+        每個 aspect 通過注意力機制查詢其他 aspects
+        """
+        batch_size, num_aspects, dim = features.shape
+
+        # Multi-head self-attention
+        Q = self.attention_query(features)  # [batch, N, dim]
+        K = self.attention_key(features)
+        V = self.attention_value(features)
+
+        # Attention scores
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / self.scale  # [batch, N, N]
+
+        # 應用 mask
+        mask_expanded = aspect_mask.unsqueeze(1)  # [batch, 1, N]
+        scores = scores.masked_fill(~mask_expanded, -1e9)
+
+        # Attention weights
+        attn_weights = F.softmax(scores, dim=-1)  # [batch, N, N]
+
+        # 應用 attention
+        composed = torch.matmul(attn_weights, V)  # [batch, N, dim]
+
+        # 殘差連接
+        composed = features + self.dropout(composed)
+        composed = self.layer_norms[0](composed)
+
+        return composed

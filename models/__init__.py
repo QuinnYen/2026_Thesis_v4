@@ -1,12 +1,12 @@
 """
 HMAC-Net 模型模組
+只保留當前架構使用的增強版模組
 """
 
 from .base_model import BaseModel, EmbeddingLayer, AttentionPooling, MLP
 from .aaha_enhanced import AAHAEnhanced
-from .pmac_enhanced import PMACEnhanced
-from .iarm_enhanced import IARMEnhanced
-from .hmac_net import HMACNet, HMACNetMultiAspect
+from .pmac_enhanced import PMACMultiAspect, PMACEnhanced
+from .iarm_enhanced import IARMMultiAspect, IARMEnhanced
 
 # BERT 支援（需要 transformers 庫）
 try:
@@ -25,9 +25,9 @@ __all__ = [
     'MLP',
     'AAHAEnhanced',
     'PMACEnhanced',
+    'PMACMultiAspect',
     'IARMEnhanced',
-    'HMACNet',
-    'HMACNetMultiAspect',
+    'IARMMultiAspect',
     'BERTEmbedding',
     'HybridEmbedding',
     'BERTForABSA',
