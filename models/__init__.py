@@ -6,6 +6,7 @@ HMAC-Net 模型模組
 from .base_model import BaseModel, EmbeddingLayer, AttentionPooling, MLP
 from .aaha_enhanced import AAHAEnhanced
 from .pmac_enhanced import PMACMultiAspect, PMACEnhanced
+from .pmac_selective import SelectivePMACMultiAspect, SelectivePMAC
 from .iarm_enhanced import IARMMultiAspect, IARMEnhanced
 
 # BERT 支援（需要 transformers 庫）
@@ -26,6 +27,8 @@ __all__ = [
     'AAHAEnhanced',
     'PMACEnhanced',
     'PMACMultiAspect',
+    'SelectivePMACMultiAspect',
+    'SelectivePMAC',
     'IARMEnhanced',
     'IARMMultiAspect',
     'BERTEmbedding',
