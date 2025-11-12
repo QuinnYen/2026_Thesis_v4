@@ -255,14 +255,14 @@ class SelectivePMACMultiAspect(nn.Module):
             mask_expanded = aspect_mask.unsqueeze(-1)
             composed = composed * mask_expanded
 
-        # 返回gate值（所有層的平均）用於分析
-        # 如果不是training，返回gate值而不是統計
-        if not self.training and len(all_gate_values) > 0:
+        # 總是返回gate值（用於收集統計）
+        # 如果有gate值，返回所有層的平均；否則返回None
+        if len(all_gate_values) > 0:
             # 取所有層的平均gate值
             avg_gates = torch.stack(all_gate_values).mean(dim=0)
             return composed, avg_gates
         else:
-            return composed, all_gate_stats
+            return composed, None
 
 
 # 為了向後兼容，提供一個簡單的接口

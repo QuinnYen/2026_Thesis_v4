@@ -1,5 +1,4 @@
 /.claude
 /.venv
 /data
-/results/experiments/checkpoints
-/results/logs
+/results/experiments

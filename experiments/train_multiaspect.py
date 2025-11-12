@@ -204,8 +204,8 @@ class HMACNetMultiAspect(BaseModel):
         gate_stats = None
         if self.use_pmac:
             composed_features, pmac_outputs = self.pmac(context_vectors, aspect_mask)
-            # 如果是 Selective PMAC，提取 gate 統計
-            if hasattr(self.pmac, 'get_gate_statistics') and pmac_outputs is not None:
+            # 如果是 Selective PMAC，pmac_outputs 就是 gate 值張量
+            if isinstance(self.pmac, SelectivePMACMultiAspect) and pmac_outputs is not None:
                 gate_stats = pmac_outputs
         else:
             composed_features = context_vectors
