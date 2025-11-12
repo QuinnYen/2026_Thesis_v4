@@ -25,7 +25,8 @@ from transformers import BertTokenizer
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.bert_embedding import BERTForABSA
-from models import AAHAEnhanced, PMACEnhanced, IARMEnhanced
+from models import AAHAEnhanced, IARMEnhanced
+from models.pmac_selective import SelectivePMACMultiAspect  # 使用 Selective PMAC
 from models.base_model import BaseModel, MLP
 from utils import (
     get_logger,
@@ -108,7 +109,10 @@ class HMACNetBERT(BaseModel):
         )
 
         # PMAC 模組（使用增強版）
-        self.pmac = PMACEnhanced(
+        # 注意: 此文件需要更新以使用新的 SelectivePMACMultiAspect
+        # 暫時註解舊的 PMAC
+        raise NotImplementedError("train_bert.py needs to be updated to use SelectivePMACMultiAspect")
+        self.pmac_old = SelectivePMACMultiAspect(
             input_dim=hidden_dim,
             fusion_dim=fusion_dim,
             num_composition_layers=num_composition_layers,

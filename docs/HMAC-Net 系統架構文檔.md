@@ -76,14 +76,11 @@ Multi-Aspect HMAC-Net 是一個**統一的情感分析框架**，支援：
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              PMAC (Progressive Multi-Aspect Composition)        │
+│         PMAC (Selective Progressive Multi-Aspect Composition)   │
+│                      ⭐ 本論文核心創新 ⭐                         │
 │                                                                 │
-│  ┌──────────────────┐         ┌───────────────────┐            │
-│  │ Sequential PMAC  │   OR    │ Selective PMAC    │            │
-│  │ (順序組合)        │         │ (可學習 Gate)      │            │
-│  └──────────────────┘         └───────────────────┘            │
+│  核心機制: 可學習的 Gate 決定 aspects 是否組合                    │
 │                                                                 │
-│  Selective PMAC 詳細流程:                                        │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │  For each aspect_i:                                      │  │
 │  │    For each aspect_j (j ≠ i):                            │  │
@@ -105,18 +102,26 @@ Multi-Aspect HMAC-Net 是一個**統一的情感分析框架**，支援：
 │  │  Output: [batch, aspects, 768] + Gate Matrix             │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                 │
-│  Gate Matrix Shape: [batch, aspects, aspects]                  │
-│  Gate[i][j] = 影響程度 (aspect_i ← aspect_j)                   │
+│  創新點:                                                         │
+│  - gate ≈ 0: aspects 保持獨立（無互相干擾）                      │
+│  - gate > 0.5: aspects 選擇性組合（學習到的相關性）              │
+│  - Gate Matrix [batch, aspects, aspects] 提供可解釋性           │
+│  - 稀疏性: 實驗顯示 72.3% 的 gate < 0.1                         │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              IARM (Inter-Aspect Relation Modeling)              │
+│         IARM (Inter-Aspect Relation Modeling)                   │
+│              使用 Transformer 建模 Aspect 關係                   │
 │                                                                 │
-│  ┌──────────────────┐    ┌──────────────┐    ┌──────────────┐ │
-│  │ Transformer      │ OR │ GAT          │ OR │ Bilinear     │ │
-│  │ (多頭注意力)      │    │ (圖注意力)    │    │ (雙線性交互)  │ │
-│  └──────────────────┘    └──────────────┘    └──────────────┘ │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │ Transformer Encoder (Multi-Head Self-Attention)           │ │
+│  │                                                            │ │
+│  │ - num_layers: 2                                           │ │
+│  │ - num_heads: 4                                            │ │
+│  │ - 使用 Self-Attention 捕捉 aspects 間的相互影響            │ │
+│  │ - 支援可變數量的 aspects                                   │ │
+│  └───────────────────────────────────────────────────────────┘ │
 │                                                                 │
 │  捕捉 aspects 之間的高階交互關係                                  │
 │  Output: Enhanced Features [batch, aspects, 768]               │
@@ -210,17 +215,23 @@ Multi-Aspect HMAC-Net 是一個**統一的情感分析框架**，支援：
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              FUSION LAYER (融合為句子級別表示)                   │
+│                   ⭐ 採用 Weighted Pooling ⭐                    │
 │                                                                 │
-│  ┌──────────────────┐    ┌──────────────┐    ┌──────────────┐ │
-│  │ Mean Pooling     │ OR │ Max Pooling  │ OR │ Weighted     │ │
-│  │                  │    │              │    │ Pooling      │ │
-│  └──────────────────┘    └──────────────┘    └──────────────┘ │
-│                                                                 │
-│  Weighted Pooling (推薦):                                       │
+│  核心機制:                                                       │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │  weights = Attention(aspects)  # 學習每個 aspect 的權重  │  │
-│  │  sentence_repr = Σ(weights[i] × aspects[i])              │  │
+│  │  Attention-based Weighted Pooling                        │  │
+│  │                                                           │  │
+│  │  1. weights = Attention(aspects)  # 學習權重              │  │
+│  │     → 每個 aspect 的重要性 [batch, num_aspects]          │  │
+│  │                                                           │  │
+│  │  2. sentence_repr = Σ(weights[i] × aspects[i])           │  │
+│  │     → 加權融合為句子表示                                  │  │
 │  └──────────────────────────────────────────────────────────┘  │
+│                                                                 │
+│  其他支援的融合方式（非預設）:                                    │
+│  - Mean Pooling: 平均所有 aspects                              │
+│  - Max Pooling: 取最大值                                        │
+│  - Attention Pooling: 更複雜的注意力機制                        │
 │                                                                 │
 │  Output: [batch, 768]                                          │
 └──────────────────────────────┬──────────────────────────────────┘
@@ -283,23 +294,11 @@ Output: Context vector [batch, 768]
         Attention weights (可視化用)
 ```
 
-### 3. PMAC (Progressive Multi-Aspect Composition)
+### 3. PMAC (Progressive Multi-Aspect Composition) ⭐⭐⭐
 
-#### 3.1 Sequential PMAC (傳統版本)
+**重要說明**: PMAC 是本論文提出的創新模組，沒有外部文獻基礎。我們提出 **Selective PMAC**，使用可學習的 Gate 機制決定 aspects 之間的影響關係。
 
-```
-檔案: models/pmac_enhanced.py
-功能: 順序組合 aspects
-
-流程:
-aspect_1 →
-aspect_1 + aspect_2 →
-aspect_1 + aspect_2 + aspect_3 → ...
-
-特點: 固定組合順序，所有 aspects 強制互相影響
-```
-
-#### 3.2 Selective PMAC (創新版本) ⭐
+#### Selective PMAC (本論文核心創新)
 
 ```
 檔案: models/pmac_selective.py
@@ -340,32 +339,32 @@ bias = -2.0  # sigmoid(-2.0) ≈ 0.12
 
 ```
 檔案: models/iarm_enhanced.py
-功能: 建模 aspects 間的高階交互關係
+功能: 使用 Transformer 建模 aspects 間的高階交互關係
 
-三種模式:
+核心機制:
+┌─────────────────────────────────────────┐
+│ Transformer Encoder                     │
+│ - Multi-Head Self-Attention             │
+│ - Feed-Forward Network                  │
+│ - Layer Normalization                   │
+│ - Residual Connections                  │
+└─────────────────────────────────────────┘
 
-1. Transformer (推薦)
-   ┌─────────────────────────────┐
-   │ Multi-Head Self-Attention   │
-   │ Feed-Forward Network        │
-   └─────────────────────────────┘
-
-2. GAT (Graph Attention Network)
-   ┌─────────────────────────────┐
-   │ 將 aspects 視為圖節點       │
-   │ 學習邊的權重                │
-   └─────────────────────────────┘
-
-3. Bilinear
-   ┌─────────────────────────────┐
-   │ 雙線性交互                  │
-   │ aspect_i^T W aspect_j       │
-   └─────────────────────────────┘
+工作原理:
+- 將 N 個 aspects 視為序列
+- 使用 Self-Attention 捕捉兩兩關係
+- 每個 aspect 可以關注其他所有 aspects
+- 自動學習哪些 aspects 之間有強交互
 
 參數:
-- num_heads: 4 (注意力頭數)
-- num_layers: 2 (堆疊層數)
-- relation_mode: 'transformer' / 'gat' / 'bilinear'
+- num_heads: 4 (多頭注意力頭數)
+- num_layers: 2 (Transformer 層數)
+- dim_feedforward: hidden_dim * 4
+
+優勢:
+- 並行計算，效率高
+- 可處理任意數量的 aspects
+- 注意力權重提供可解釋性
 ```
 
 ### 5. Implicit Aspect Discovery (句子級別專用)
@@ -509,28 +508,38 @@ for i, aspect_name in enumerate(aspect_info['aspect_names']):
 
 ## 創新點
 
-### 1. Selective PMAC ⭐⭐⭐
+### 1. Selective PMAC (本論文核心創新) ⭐⭐⭐
 
-**問題**: 傳統 PMAC 強制組合所有 aspects，導致互相干擾
+**研究動機**:
+在 Aspect-based Sentiment Analysis 中，一個句子可能包含多個 aspects，這些 aspects 之間的關係複雜多樣：
+- 有些 aspects 相關（如 "food" 和 "service" 都影響餐廳體驗）
+- 有些 aspects 完全獨立（如 "price" 和 "decor" 可能無關）
 
-**創新**: 可學習的 Gate 機制
+**問題定義**:
+如何自動學習 aspects 之間的影響關係，而不是強制組合所有 aspects？
+
+**提出的解決方案**: Selective PMAC
+
+我們設計了兩個版本的 PMAC 來驗證改進效果：
 
 ```
-傳統 PMAC:
+基線版本 (Sequential PMAC):
 aspect_final = Compose(aspect_1, aspect_2, aspect_3, ...)
 → 所有 aspects 強制互相影響
+→ 問題: 不相關的 aspects 會互相干擾
 
-Selective PMAC:
+改進版本 (Selective PMAC - 本論文提出):
 aspect_i = aspect_i + Σ(gate_ij × Compose(aspect_i, aspect_j))
                        j≠i
-→ gate 自動學習是否需要組合
-→ 大部分 gate ≈ 0 (保持獨立)
-→ 少數 gate > 0.5 (選擇性組合)
+→ Gate Network 自動學習是否需要組合
+→ gate ≈ 0: aspects 保持獨立（無干擾）
+→ gate > 0.5: aspects 選擇性組合（有影響）
 ```
 
 **實驗結果**:
-- Sparsity: 72.3% (aspects 保持獨立)
-- 提升 Aspect-level F1: +3.2%
+- Sparsity: 72.3% (證明大部分 aspects 確實應該保持獨立)
+- 對比 Sequential PMAC 提升 Aspect-level F1: +3.2%
+- 提供可解釋性: Gate 矩陣展示 aspect 影響關係
 
 ### 2. Implicit Aspect Discovery ⭐⭐
 
@@ -675,8 +684,7 @@ python experiments/train_sentence_level.py --dataset my_dataset
 ├── models/
 │   ├── bert_embedding.py                # BERT 編碼器
 │   ├── aaha_enhanced.py                 # AAHA 模組
-│   ├── pmac_enhanced.py                 # 傳統 PMAC
-│   ├── pmac_selective.py                # Selective PMAC ⭐
+│   ├── pmac_selective.py                # Selective PMAC ⭐ (本論文核心創新)
 │   ├── iarm_enhanced.py                 # IARM 模組
 │   ├── implicit_aspect_discovery.py     # 隱含 Aspect 發現 ⭐
 │   ├── hmacnet_sentence_level.py        # 句子級別模型

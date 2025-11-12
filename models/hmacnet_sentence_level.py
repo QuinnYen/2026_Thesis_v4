@@ -13,7 +13,6 @@ import torch.nn.functional as F
 
 from models.bert_embedding import BERTForABSA
 from models.aaha_enhanced import AAHAEnhanced
-from models.pmac_enhanced import PMACMultiAspect
 from models.pmac_selective import SelectivePMACMultiAspect
 from models.iarm_enhanced import IARMMultiAspect
 from models.implicit_aspect_discovery import ImplicitAspectDiscovery, PREDEFINED_ASPECTS
@@ -40,12 +39,12 @@ class HMACNetSentenceLevel(BaseModel):
         # Implicit Aspect Discovery 參數
         num_implicit_aspects: int = 5,
         domain: str = 'generic',  # 領域類型
-        # PMAC 參數
+        # PMAC 參數 (Selective PMAC)
         use_pmac: bool = True,
-        pmac_composition_mode: str = 'sequential',
-        # IARM 參數
+        gate_bias_init: float = -3.0,
+        gate_weight_gain: float = 0.1,
+        # IARM 參數 (Transformer-based)
         use_iarm: bool = True,
-        iarm_relation_mode: str = 'transformer',
         iarm_num_heads: int = 4,
         iarm_num_layers: int = 2,
         # 融合策略
@@ -101,36 +100,27 @@ class HMACNetSentenceLevel(BaseModel):
                 output_dropout=dropout
             )
 
-        # 4. PMAC (多面向組合)
+        # 4. PMAC (Selective PMAC - 本論文創新)
         if use_pmac:
-            if pmac_composition_mode == 'selective':
-                self.pmac = SelectivePMACMultiAspect(
-                    input_dim=hidden_dim,
-                    fusion_dim=hidden_dim,
-                    num_composition_layers=2,
-                    hidden_dim=256,
-                    dropout=dropout,
-                    use_layer_norm=True
-                )
-            else:
-                self.pmac = PMACMultiAspect(
-                    input_dim=hidden_dim,
-                    fusion_dim=hidden_dim,
-                    num_composition_layers=2,
-                    hidden_dim=128,
-                    dropout=dropout,
-                    composition_mode=pmac_composition_mode
-                )
+            self.pmac = SelectivePMACMultiAspect(
+                input_dim=hidden_dim,
+                fusion_dim=hidden_dim,
+                num_composition_layers=2,
+                hidden_dim=256,
+                dropout=dropout,
+                use_layer_norm=True,
+                gate_bias_init=gate_bias_init,
+                gate_weight_gain=gate_weight_gain
+            )
 
-        # 5. IARM (面向間關係建模)
+        # 5. IARM (Transformer-based 面向間關係建模)
         if use_iarm:
             self.iarm = IARMMultiAspect(
                 input_dim=hidden_dim,
                 relation_dim=hidden_dim,
                 num_heads=iarm_num_heads,
                 num_layers=iarm_num_layers,
-                dropout=dropout,
-                relation_mode=iarm_relation_mode
+                dropout=dropout
             )
 
         # 6. 融合層 (將多個 aspects 融合為句子級別表示)
@@ -310,7 +300,8 @@ def create_sentence_level_hmacnet(
     domain: str = 'generic',
     use_pmac: bool = True,
     use_iarm: bool = True,
-    pmac_mode: str = 'selective',
+    gate_bias_init: float = -3.0,
+    gate_weight_gain: float = 0.1,
     **kwargs
 ):
     """
@@ -319,9 +310,10 @@ def create_sentence_level_hmacnet(
     參數:
         num_classes: 類別數（2=二分類, 3=三分類, 5=五分類等）
         domain: 領域類型（用於選擇預定義的 aspects）
-        use_pmac: 是否使用 PMAC
+        use_pmac: 是否使用 Selective PMAC
         use_iarm: 是否使用 IARM
-        pmac_mode: PMAC 模式
+        gate_bias_init: Gate 偏置初始值
+        gate_weight_gain: Gate 權重增益
         **kwargs: 其他參數
 
     返回:
@@ -332,7 +324,8 @@ def create_sentence_level_hmacnet(
         domain=domain,
         use_pmac=use_pmac,
         use_iarm=use_iarm,
-        pmac_composition_mode=pmac_mode,
+        gate_bias_init=gate_bias_init,
+        gate_weight_gain=gate_weight_gain,
         **kwargs
     )
 
@@ -355,7 +348,6 @@ if __name__ == '__main__':
         domain='movie_review',
         num_implicit_aspects=5,
         use_pmac=True,
-        pmac_composition_mode='selective',
         use_iarm=True,
         fusion_strategy='weighted_pooling'
     )

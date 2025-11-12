@@ -31,7 +31,6 @@ from data.semeval_multiaspect import load_multiaspect_data
 from data.multiaspect_dataset import create_multiaspect_dataloaders
 from models.bert_embedding import BERTForABSA
 from models.aaha_enhanced import AAHAEnhanced
-from models.pmac_enhanced import PMACMultiAspect
 from models.pmac_selective import SelectivePMACMultiAspect
 from models.iarm_enhanced import IARMMultiAspect
 from models.base_model import BaseModel, MLP
@@ -54,12 +53,10 @@ class HMACNetMultiAspect(BaseModel):
         dropout: float = 0.1,
         # PMAC 參數
         use_pmac: bool = True,
-        pmac_composition_mode: str = 'sequential',  # 'sequential', 'pairwise', 'attention', 'selective'
         gate_bias_init: float = -3.0,  # Selective PMAC gate 初始化偏置
         gate_weight_gain: float = 0.1,  # Selective PMAC gate 權重增益
-        # IARM 參數
+        # IARM 參數 (Transformer-based)
         use_iarm: bool = True,
-        iarm_relation_mode: str = 'transformer',  # 'transformer', 'gat', 'bilinear'
         iarm_num_heads: int = 4,
         iarm_num_layers: int = 2
     ):
@@ -96,40 +93,27 @@ class HMACNetMultiAspect(BaseModel):
             output_dropout=dropout
         )
 
-        # PMAC Multi-Aspect（真正的多面向組合）
+        # PMAC Multi-Aspect（Selective PMAC - 本論文核心創新）
         if use_pmac:
-            if pmac_composition_mode == 'selective':
-                # 使用 Selective PMAC（可學習的 gate）
-                self.pmac = SelectivePMACMultiAspect(
-                    input_dim=hidden_dim,
-                    fusion_dim=hidden_dim,
-                    num_composition_layers=2,
-                    hidden_dim=256,
-                    dropout=dropout,
-                    use_layer_norm=True,
-                    gate_bias_init=gate_bias_init,  # 新增參數
-                    gate_weight_gain=gate_weight_gain  # 新增參數
-                )
-            else:
-                # 使用傳統 PMAC
-                self.pmac = PMACMultiAspect(
-                    input_dim=hidden_dim,
-                    fusion_dim=hidden_dim,
-                    num_composition_layers=2,
-                    hidden_dim=128,
-                    dropout=dropout,
-                    composition_mode=pmac_composition_mode
-                )
+            self.pmac = SelectivePMACMultiAspect(
+                input_dim=hidden_dim,
+                fusion_dim=hidden_dim,
+                num_composition_layers=2,
+                hidden_dim=256,
+                dropout=dropout,
+                use_layer_norm=True,
+                gate_bias_init=gate_bias_init,
+                gate_weight_gain=gate_weight_gain
+            )
 
-        # IARM Multi-Aspect（真正的面向間關係建模）
+        # IARM Multi-Aspect（Transformer-based 關係建模）
         if use_iarm:
             self.iarm = IARMMultiAspect(
                 input_dim=hidden_dim,
                 relation_dim=hidden_dim,
                 num_heads=iarm_num_heads,
                 num_layers=iarm_num_layers,
-                dropout=dropout,
-                relation_mode=iarm_relation_mode
+                dropout=dropout
             )
 
         # 分類器（為每個 aspect 獨立分類）
@@ -320,8 +304,8 @@ def generate_training_visualizations(results, save_dir):
     args = results['args']
     report_lines.append("Configuration:")
     report_lines.append(f"  Model: {args['bert_model']}")
-    report_lines.append(f"  PMAC: {'Enabled' if args['use_pmac'] else 'Disabled'} ({args['pmac_mode']})")
-    report_lines.append(f"  IARM: {'Enabled' if args['use_iarm'] else 'Disabled'} ({args['iarm_mode']})")
+    report_lines.append(f"  PMAC: {'Enabled (Selective)' if args['use_pmac'] else 'Disabled'}")
+    report_lines.append(f"  IARM: {'Enabled (Transformer)' if args['use_iarm'] else 'Disabled'}")
     report_lines.append(f"  Loss Type: {args.get('loss_type', 'ce')}")
     if args.get('loss_type') == 'focal':
         report_lines.append(f"  Focal Gamma: {args.get('focal_gamma', 2.0)}")
@@ -629,11 +613,9 @@ def train_multiaspect_model(args):
         num_classes=3,
         dropout=args.dropout,
         use_pmac=args.use_pmac,
-        pmac_composition_mode=args.pmac_mode,
-        gate_bias_init=args.gate_bias_init,  # 新增
-        gate_weight_gain=args.gate_weight_gain,  # 新增
+        gate_bias_init=args.gate_bias_init,
+        gate_weight_gain=args.gate_weight_gain,
         use_iarm=args.use_iarm,
-        iarm_relation_mode=args.iarm_mode,
         iarm_num_heads=args.iarm_heads,
         iarm_num_layers=args.iarm_layers
     ).to(device)
@@ -642,8 +624,8 @@ def train_multiaspect_model(args):
     print(f"  BERT: {args.bert_model}")
     print(f"  Hidden dim: {args.hidden_dim}")
     print(f"  Dropout: {args.dropout}")
-    print(f"  PMAC: {'Enabled' if args.use_pmac else 'Disabled'} ({args.pmac_mode if args.use_pmac else 'N/A'})")
-    print(f"  IARM: {'Enabled' if args.use_iarm else 'Disabled'} ({args.iarm_mode if args.use_iarm else 'N/A'})")
+    print(f"  PMAC: {'Enabled (Selective)' if args.use_pmac else 'Disabled'}")
+    print(f"  IARM: {'Enabled (Transformer)' if args.use_iarm else 'Disabled'}")
 
     print(f"\n訓練配置:")
     print(f"  Batch size: {args.batch_size}")
@@ -804,7 +786,7 @@ def train_multiaspect_model(args):
             patience_counter = 0
 
             # 如果使用Selective PMAC，收集gate統計
-            if args.use_pmac and args.pmac_mode == 'selective':
+            if args.use_pmac:
                 print("\n  [Gate Analysis] 收集Selective PMAC的gate統計...")
                 gate_metrics = evaluate_multi_aspect(model, val_loader, device, loss_fn_for_eval, args, collect_gates=True)
                 if 'gate_stats' in gate_metrics:
@@ -838,7 +820,7 @@ def train_multiaspect_model(args):
 
     # 測試集評估（也計算 loss）
     # 如果使用Selective PMAC，收集gate統計
-    collect_test_gates = args.use_pmac and args.pmac_mode == 'selective'
+    collect_test_gates = args.use_pmac  # Selective PMAC 總是收集 gate 統計
     loss_fn_for_eval = loss_fn if args.loss_type != 'ce' else None
     test_metrics = evaluate_multi_aspect(model, test_loader, device, loss_fn_for_eval, args, collect_gates=collect_test_gates)
 
@@ -960,32 +942,26 @@ def main():
     parser.add_argument('--dropout', type=float, default=0.1,
                         help='Dropout 比率')
 
-    # PMAC 參數
+    # PMAC 參數 (Selective PMAC - 本論文核心創新)
     parser.add_argument('--use_pmac', action='store_true', default=False,
-                        help='是否使用 PMAC')
-    parser.add_argument('--pmac_mode', type=str, default='sequential',
-                        choices=['sequential', 'pairwise', 'attention', 'selective'],
-                        help='PMAC 組合模式 (selective=可學習gate)')
+                        help='是否使用 Selective PMAC')
     parser.add_argument('--gate_bias_init', type=float, default=-3.0,
-                        help='Selective PMAC gate 偏置初始值 (-2.0≈0.12, -3.0≈0.05, -4.0≈0.02)')
+                        help='Gate 偏置初始值 (-2.0≈0.12, -3.0≈0.05, -4.0≈0.02)')
     parser.add_argument('--gate_weight_gain', type=float, default=0.1,
-                        help='Selective PMAC gate 權重初始化增益')
+                        help='Gate 權重初始化增益')
     parser.add_argument('--gate_sparsity_weight', type=float, default=0.0,
                         help='Gate 稀疏性正則化權重 (0=不使用, 推薦0.001-0.01)')
     parser.add_argument('--gate_sparsity_type', type=str, default='l1',
                         choices=['l1', 'l2', 'hoyer', 'target'],
                         help='Gate 稀疏性正則化類型')
 
-    # IARM 參數
+    # IARM 參數 (Transformer-based Inter-Aspect Relation Modeling)
     parser.add_argument('--use_iarm', action='store_true', default=False,
-                        help='是否使用 IARM')
-    parser.add_argument('--iarm_mode', type=str, default='transformer',
-                        choices=['transformer', 'gat', 'bilinear'],
-                        help='IARM 關係模式')
+                        help='是否使用 IARM (Transformer)')
     parser.add_argument('--iarm_heads', type=int, default=4,
-                        help='IARM 注意力頭數')
+                        help='IARM Transformer 注意力頭數')
     parser.add_argument('--iarm_layers', type=int, default=2,
-                        help='IARM 層數')
+                        help='IARM Transformer 層數')
 
     # 訓練參數
     parser.add_argument('--batch_size', type=int, default=16,
