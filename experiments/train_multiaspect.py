@@ -54,7 +54,9 @@ class HMACNetMultiAspect(BaseModel):
         dropout: float = 0.1,
         # PMAC 參數
         use_pmac: bool = True,
-        pmac_composition_mode: str = 'sequential',  # 'sequential', 'pairwise', 'attention'
+        pmac_composition_mode: str = 'sequential',  # 'sequential', 'pairwise', 'attention', 'selective'
+        gate_bias_init: float = -3.0,  # Selective PMAC gate 初始化偏置
+        gate_weight_gain: float = 0.1,  # Selective PMAC gate 權重增益
         # IARM 參數
         use_iarm: bool = True,
         iarm_relation_mode: str = 'transformer',  # 'transformer', 'gat', 'bilinear'
@@ -104,7 +106,9 @@ class HMACNetMultiAspect(BaseModel):
                     num_composition_layers=2,
                     hidden_dim=256,
                     dropout=dropout,
-                    use_layer_norm=True
+                    use_layer_norm=True,
+                    gate_bias_init=gate_bias_init,  # 新增參數
+                    gate_weight_gain=gate_weight_gain  # 新增參數
                 )
             else:
                 # 使用傳統 PMAC
@@ -626,6 +630,8 @@ def train_multiaspect_model(args):
         dropout=args.dropout,
         use_pmac=args.use_pmac,
         pmac_composition_mode=args.pmac_mode,
+        gate_bias_init=args.gate_bias_init,  # 新增
+        gate_weight_gain=args.gate_weight_gain,  # 新增
         use_iarm=args.use_iarm,
         iarm_relation_mode=args.iarm_mode,
         iarm_num_heads=args.iarm_heads,
@@ -960,6 +966,15 @@ def main():
     parser.add_argument('--pmac_mode', type=str, default='sequential',
                         choices=['sequential', 'pairwise', 'attention', 'selective'],
                         help='PMAC 組合模式 (selective=可學習gate)')
+    parser.add_argument('--gate_bias_init', type=float, default=-3.0,
+                        help='Selective PMAC gate 偏置初始值 (-2.0≈0.12, -3.0≈0.05, -4.0≈0.02)')
+    parser.add_argument('--gate_weight_gain', type=float, default=0.1,
+                        help='Selective PMAC gate 權重初始化增益')
+    parser.add_argument('--gate_sparsity_weight', type=float, default=0.0,
+                        help='Gate 稀疏性正則化權重 (0=不使用, 推薦0.001-0.01)')
+    parser.add_argument('--gate_sparsity_type', type=str, default='l1',
+                        choices=['l1', 'l2', 'hoyer', 'target'],
+                        help='Gate 稀疏性正則化類型')
 
     # IARM 參數
     parser.add_argument('--use_iarm', action='store_true', default=False,

@@ -33,13 +33,27 @@ class SelectivePMAC(nn.Module):
         hidden_dim: int = 512,
         dropout: float = 0.3,
         use_layer_norm: bool = True,
-        gate_activation: str = 'sigmoid'  # 'sigmoid', 'tanh', 'relu'
+        gate_activation: str = 'sigmoid',  # 'sigmoid', 'tanh', 'relu'
+        gate_bias_init: float = -3.0,  # 控制 gate 初始值的稀疏程度
+        gate_weight_gain: float = 0.1  # 控制權重初始化的縮放
     ):
+        """
+        Selective PMAC 初始化
+
+        參數:
+            gate_bias_init: Gate 偏置初始值
+                -2.0: sigmoid(-2.0) ≈ 0.12 (預設，較寬鬆)
+                -3.0: sigmoid(-3.0) ≈ 0.05 (推薦，更稀疏)
+                -4.0: sigmoid(-4.0) ≈ 0.02 (極度稀疏)
+            gate_weight_gain: 權重初始化的增益，越小越保守
+        """
         super(SelectivePMAC, self).__init__()
 
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.use_layer_norm = use_layer_norm
+        self.gate_bias_init = gate_bias_init
+        self.gate_weight_gain = gate_weight_gain
 
         # Gate 網絡：學習是否需要組合
         self.relation_gate = nn.Sequential(
@@ -72,13 +86,32 @@ class SelectivePMAC(nn.Module):
             self.layer_norm = nn.LayerNorm(input_dim)
 
         # 初始化：讓 gate 初始時偏向小值（稀疏性）
+        self._initialize_gate_network()
+
+    def _initialize_gate_network(self):
+        """
+        初始化 Gate 網絡以鼓勵稀疏性
+
+        策略：
+        1. 使用小的 weight gain 讓權重保守
+        2. 使用負的 bias 讓初始 gate 值較低
+        3. 只初始化最後一層（輸出層）的 bias
+        """
         with torch.no_grad():
-            for module in self.relation_gate.modules():
+            # 遍歷 gate network 的所有層
+            for idx, module in enumerate(self.relation_gate.modules()):
                 if isinstance(module, nn.Linear):
-                    # 小的初始化讓 gate 初始接近 0
-                    nn.init.xavier_uniform_(module.weight, gain=0.1)
+                    # 權重：使用小的 gain
+                    nn.init.xavier_uniform_(module.weight, gain=self.gate_weight_gain)
+
+                    # 偏置：只在最後一層設置負值
                     if module.bias is not None:
-                        nn.init.constant_(module.bias, -2.0)  # sigmoid(-2) ≈ 0.12
+                        # 最後一層使用負偏置以鼓勵稀疏性
+                        if idx == len(list(self.relation_gate.modules())) - 1:
+                            nn.init.constant_(module.bias, self.gate_bias_init)
+                        else:
+                            # 其他層使用標準初始化
+                            nn.init.zeros_(module.bias)
 
     def forward(self, aspects, aspect_mask=None):
         """
@@ -194,7 +227,9 @@ class SelectivePMACMultiAspect(nn.Module):
         num_composition_layers: int = 2,
         hidden_dim: int = 256,
         dropout: float = 0.3,
-        use_layer_norm: bool = True
+        use_layer_norm: bool = True,
+        gate_bias_init: float = -3.0,  # 新增：Gate 偏置初始值
+        gate_weight_gain: float = 0.1  # 新增：權重增益
     ):
         super(SelectivePMACMultiAspect, self).__init__()
 
@@ -207,7 +242,9 @@ class SelectivePMACMultiAspect(nn.Module):
                 input_dim=input_dim,
                 hidden_dim=hidden_dim,
                 dropout=dropout,
-                use_layer_norm=use_layer_norm
+                use_layer_norm=use_layer_norm,
+                gate_bias_init=gate_bias_init,  # 傳遞參數
+                gate_weight_gain=gate_weight_gain  # 傳遞參數
             )
             for _ in range(num_composition_layers)
         ])

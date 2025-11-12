@@ -6,11 +6,43 @@
 
 ## 🚀 單行命令（Windows 終端機直接複製執行）
 
-### 1. 完整模型 - Selective PMAC + IARM + Focal Loss（推薦）⭐
+### 1. 完整模型 - Selective PMAC (優化版) + IARM + Focal Loss（最推薦）⭐⭐⭐
+
+```powershell
+python experiments/train_multiaspect.py --epochs 30 --batch_size 16 --lr 2e-5 --dropout 0.3 --accumulation_steps 2 --use_pmac --pmac_mode selective --gate_bias_init -3.0 --use_iarm --iarm_mode transformer --loss_type focal --focal_gamma 2.0 --class_weights 1.0 3.0 1.0
+```
+
+**新增改進**:
+- `--gate_bias_init -3.0`: 更稀疏的 Gate 初始化 (sigmoid(-3.0) ≈ 0.05)
+- 預期 Gate Sparsity: 50-70% (之前 21.5%)
+
+### 1b. 極度稀疏 Gate 版本（實驗性）
+
+```powershell
+python experiments/train_multiaspect.py --epochs 30 --batch_size 16 --lr 2e-5 --dropout 0.3 --accumulation_steps 2 --use_pmac --pmac_mode selective --gate_bias_init -4.0 --use_iarm --iarm_mode transformer --loss_type focal --focal_gamma 2.0 --class_weights 1.0 3.0 1.0
+```
+
+**極度稀疏設定**:
+- `--gate_bias_init -4.0`: sigmoid(-4.0) ≈ 0.02
+- 預期 Gate Sparsity: 70-90%
+
+### 1c. 加入 Gate 稀疏性正則化（進階）
+
+```powershell
+python experiments/train_multiaspect.py --epochs 30 --batch_size 16 --lr 2e-5 --dropout 0.3 --accumulation_steps 2 --use_pmac --pmac_mode selective --gate_bias_init -3.0 --gate_sparsity_weight 0.01 --use_iarm --iarm_mode transformer --loss_type focal --focal_gamma 2.0 --class_weights 1.0 3.0 1.0
+```
+
+**正則化設定**:
+- `--gate_sparsity_weight 0.01`: L1 正則化權重
+- Loss = Classification Loss + 0.01 × Gate Sparsity Loss
+
+### 2. 原始 Selective PMAC（對比用）
 
 ```powershell
 python experiments/train_multiaspect.py --epochs 30 --batch_size 16 --lr 2e-5 --dropout 0.3 --accumulation_steps 2 --use_pmac --pmac_mode selective --use_iarm --iarm_mode transformer --loss_type focal --focal_gamma 2.0 --class_weights 1.0 3.0 1.0
 ```
+
+**原始設定** (gate_bias_init = -3.0 為新預設值)
 
 ### 2. Selective PMAC + IARM（標準 CE Loss）
 
@@ -199,12 +231,47 @@ python data/dataset_manager.py test --dataset semeval_rest --limit 10
 |------|------|--------|--------|
 | `--use_pmac` | 啟用 PMAC | False | flag |
 | `--pmac_mode` | PMAC 組合模式 | sequential | sequential, pairwise, attention, selective |
+| `--gate_bias_init` | Gate 偏置初始值 | -3.0 | -2.0 ~ -5.0 |
+| `--gate_weight_gain` | Gate 權重初始化增益 | 0.1 | 0.01 ~ 1.0 |
+| `--gate_sparsity_weight` | Gate 稀疏性正則化權重 | 0.0 | 0.0 ~ 0.1 |
+| `--gate_sparsity_type` | 稀疏性正則化類型 | l1 | l1, l2, hoyer, target |
 
 **PMAC 模式說明：**
 - `sequential`: 順序組合各 aspects
 - `pairwise`: 成對組合
 - `attention`: 注意力機制組合
 - `selective`: **可學習的 gate（推薦）** - 自動決定是否組合
+
+**Gate 初始化參數詳解：**
+
+| `gate_bias_init` | sigmoid 輸出 | 初始 Sparsity | 適用場景 |
+|------------------|-------------|--------------|---------|
+| -2.0 | ≈ 0.12 | 低 (~20%) | aspects 關聯性較強 |
+| **-3.0** | ≈ 0.05 | **中 (~50-70%)** | **一般情況（推薦）** |
+| -4.0 | ≈ 0.02 | 高 (~70-90%) | aspects 高度獨立 |
+| -5.0 | ≈ 0.01 | 極高 (~90%+) | 實驗性，可能過於稀疏 |
+
+**Gate 稀疏性正則化：**
+
+```python
+# 不使用正則化（預設）
+--gate_sparsity_weight 0.0
+
+# 輕度正則化
+--gate_sparsity_weight 0.001
+
+# 中度正則化（推薦）
+--gate_sparsity_weight 0.01
+
+# 強力正則化
+--gate_sparsity_weight 0.1
+```
+
+**正則化類型說明：**
+- `l1`: L1 正則（鼓勵所有 gate → 0）
+- `l2`: L2 正則（較溫和）
+- `hoyer`: Hoyer 稀疏性（分佈的稀疏程度）
+- `target`: 目標稀疏性約束（需額外設定目標值）
 
 ### IARM 參數
 | 參數 | 說明 | 預設值 | 可選值 |

@@ -1,0 +1,33 @@
+================================================================================
+實驗摘要 - 20251112_170943
+================================================================================
+
+實驗配置:
+  實驗名稱: pmac_iarm_drop0.3_bs16x2_focal
+  PMAC: Enabled
+  IARM: Enabled
+  Dropout: 0.3
+  Batch Size: 16 x 2 = 32
+  Loss Type: focal
+  Learning Rate: 2e-05
+  Epochs: 30
+
+訓練結果:
+  Best Epoch: 7
+  Best Val F1: 0.6555
+  Test Accuracy: 0.7766
+  Test F1 (Macro): 0.6894
+  Test Precision: 0.6936
+  Test Recall: 0.6858
+
+Per-Class Test F1:
+  Negative: 0.7014
+  Neutral:  0.4857
+  Positive: 0.8811
+
+文件路徑:
+  實驗資料夾: D:\Quinn_SmallHouse\2026_Thesis_v4\results\experiments\20251112_170943_pmac_iarm_drop0.3_bs16x2_focal
+  最佳模型: D:\Quinn_SmallHouse\2026_Thesis_v4\results\experiments\20251112_170943_pmac_iarm_drop0.3_bs16x2_focal\checkpoints\best_model_epoch7_f1_0.6555.pt
+  結果JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\experiments\20251112_170943_pmac_iarm_drop0.3_bs16x2_focal\reports\experiment_results.json
+  配置JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\experiments\20251112_170943_pmac_iarm_drop0.3_bs16x2_focal\reports\experiment_config.json
+  可視化: D:\Quinn_SmallHouse\2026_Thesis_v4\results\experiments\20251112_170943_pmac_iarm_drop0.3_bs16x2_focal\visualizations
