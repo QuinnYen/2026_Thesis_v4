@@ -28,6 +28,7 @@ import seaborn as sns
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data.semeval_multiaspect import load_multiaspect_data
+from data.augmented_dataset import load_augmented_data
 from data.multiaspect_dataset import create_multiaspect_dataloaders
 from models.bert_embedding import BERTForABSA
 from models.aaha_enhanced import AAHAEnhanced
@@ -37,7 +38,7 @@ from models.base_model import BaseModel, MLP
 from utils.focal_loss import get_loss_function
 
 # Import baseline models
-from baselines import create_baseline
+from experiments.baselines import create_baseline
 
 
 class HMACNetMultiAspect(BaseModel):
@@ -573,27 +574,53 @@ def train_multiaspect_model(args):
     print(f"  Visualizations: {visualizations_dir}")
     print(f"  Reports: {reports_dir}")
 
-    # 數據路徑
-    train_path = project_root / 'data' / 'raw' / 'semeval2014' / 'Restaurants_Train_v2.xml'
-    test_path = project_root / 'data' / 'raw' / 'semeval2014' / 'Restaurants_Test_Gold.xml'
-
     # 加載數據
     print("\n" + "="*80)
     print("加載 Multi-Aspect 數據")
     print("="*80)
-    train_samples, test_samples = load_multiaspect_data(
-        train_path=str(train_path),
-        test_path=str(test_path),
-        min_aspects=args.min_aspects,
-        max_aspects=args.max_aspects,
-        include_single_aspect=args.include_single_aspect,
-        virtual_aspect_mode=args.virtual_aspect_mode
-    )
+
+    # 根據 dataset 參數設置數據路徑
+    if args.dataset == 'restaurants':
+        train_xml = 'Restaurants_Train_v2.xml'
+        test_xml = 'Restaurants_Test_Gold.xml'
+        default_aug_dir = 'data/augmented_restaurants'
+    elif args.dataset == 'laptops':
+        train_xml = 'Laptop_Train_v2.xml'
+        test_xml = 'Laptops_Test_Gold.xml'
+        default_aug_dir = 'data/augmented_laptops'
+    else:
+        raise ValueError(f"不支援的數據集: {args.dataset}")
+
+    print(f"數據集: {args.dataset.upper()}")
+
+    # 檢查是否使用增強數據
+    use_augmented = getattr(args, 'use_augmented', False)
+
+    if use_augmented:
+        print("使用增強數據集 (EDA Augmentation)")
+        # 如果未指定 augmented_dir，使用默認值
+        augmented_dir = args.augmented_dir if args.augmented_dir else default_aug_dir
+        print(f"增強數據目錄: {augmented_dir}")
+        train_all_samples, test_samples = load_augmented_data(augmented_dir)
+    else:
+        print("使用原始數據集")
+        # 數據路徑
+        train_path = project_root / 'data' / 'raw' / 'semeval2014' / train_xml
+        test_path = project_root / 'data' / 'raw' / 'semeval2014' / test_xml
+
+        train_all_samples, test_samples = load_multiaspect_data(
+            train_path=str(train_path),
+            test_path=str(test_path),
+            min_aspects=args.min_aspects,
+            max_aspects=args.max_aspects,
+            include_single_aspect=args.include_single_aspect,
+            virtual_aspect_mode=args.virtual_aspect_mode
+        )
 
     # 分割驗證集
-    val_size = int(0.1 * len(train_samples))
-    val_samples = train_samples[:val_size]
-    train_samples = train_samples[val_size:]
+    val_size = int(0.1 * len(train_all_samples))
+    val_samples = train_all_samples[:val_size]
+    train_samples = train_all_samples[val_size:]
 
     print(f"\n數據分割:")
     print(f"  訓練: {len(train_samples)}")
@@ -957,6 +984,13 @@ def main():
     parser = argparse.ArgumentParser(description='訓練 Multi-Aspect HMAC-Net')
 
     # 數據參數
+    parser.add_argument('--dataset', type=str, required=True,
+                        choices=['restaurants', 'laptops'],
+                        help='數據集選擇 (restaurants 或 laptops)')
+    parser.add_argument('--use_augmented', action='store_true', default=False,
+                        help='使用增強數據集 (EDA Augmentation)')
+    parser.add_argument('--augmented_dir', type=str, default=None,
+                        help='增強數據目錄（若不指定，自動根據 dataset 設置）')
     parser.add_argument('--min_aspects', type=int, default=2,
                         help='最小 aspect 數量（用於過濾）')
     parser.add_argument('--max_aspects', type=int, default=8,

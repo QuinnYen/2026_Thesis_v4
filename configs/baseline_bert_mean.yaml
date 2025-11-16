@@ -1,0 +1,43 @@
+# Baseline: BERT + Mean Pooling
+# 最简单的池化方法
+
+experiment_name: "baseline_bert_mean"
+
+# 模型配置
+model:
+  baseline: "bert_mean"
+  bert_model: "distilbert-base-uncased"
+  freeze_bert: false
+  hidden_dim: 768
+  dropout: 0.3
+
+# 数据配置
+data:
+  min_aspects: 2
+  max_aspects: 8
+  include_single_aspect: true
+  virtual_aspect_mode: "overall"
+  max_text_len: 128
+  max_aspect_len: 10
+
+# 训练配置
+training:
+  batch_size: 32  # 简单模型，可以用较大 batch
+  accumulation_steps: 1
+  epochs: 30
+  lr: 2.0e-5
+  weight_decay: 0.01
+  grad_clip: 1.0
+  patience: 10
+
+  # 调度器
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 损失函数（与其他 baseline 完全一致）
+  loss_type: "focal"
+  focal_gamma: 2.5
+  class_weights: [1.0, 5.0, 1.0]  # [Neg, Neu, Pos]
+
+  # Virtual aspect
+  virtual_weight: 0.5

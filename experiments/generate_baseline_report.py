@@ -27,6 +27,9 @@ def read_metrics(exp_dir):
     metrics = {
         'test_acc': None,
         'test_f1': None,
+        'test_f1_neg': None,
+        'test_f1_neu': None,
+        'test_f1_pos': None,
         'best_epoch': None,
         'timestamp': None
     }
@@ -41,6 +44,13 @@ def read_metrics(exp_dir):
                 test_metrics = data.get('test_metrics', {})
                 metrics['test_acc'] = test_metrics.get('accuracy')
                 metrics['test_f1'] = test_metrics.get('f1_macro')
+
+                # 讀取各類別的 F1 值
+                f1_per_class = test_metrics.get('f1_per_class', [])
+                if len(f1_per_class) >= 3:
+                    metrics['test_f1_neg'] = f1_per_class[0]  # Negative
+                    metrics['test_f1_neu'] = f1_per_class[1]  # Neutral
+                    metrics['test_f1_pos'] = f1_per_class[2]  # Positive
 
                 # 讀取 best epoch (從 validation F1 最高的 epoch)
                 if 'best_val_f1' in data and 'history' in data:
@@ -77,21 +87,23 @@ def generate_markdown(results):
     report += "| Epochs | 30 |\n"
     report += "| Learning Rate | 2e-5 |\n"
     report += "| Dropout | 0.3 |\n"
-    report += "| Loss Type | Focal Loss (gamma=2.0) |\n"
-    report += "| Class Weights | [1.0, 3.0, 1.0] |\n"
+    report += "| Loss Type | Focal Loss (gamma=2.5) |\n"
+    report += "| Class Weights | [1.0, 5.0, 1.0] |\n"
     report += "| GPU | RTX 3090 (24GB) |\n\n"
 
     report += "## 實驗結果對比\n\n"
-    report += "| Baseline | Batch Size | Test Acc | Test F1 | Best Epoch | 實驗時間 |\n"
-    report += "|----------|------------|----------|---------|------------|----------|\n"
+    report += "| Baseline | Batch Size | Test Acc | Test F1 | Neg F1 | Neu F1 | Pos F1 | Best Epoch |\n"
+    report += "|----------|------------|----------|---------|--------|--------|--------|------------|\n"
 
     for r in results:
         acc = f"{r['test_acc']:.4f}" if r['test_acc'] else "N/A"
         f1 = f"{r['test_f1']:.4f}" if r['test_f1'] else "N/A"
+        f1_neg = f"{r['test_f1_neg']:.4f}" if r['test_f1_neg'] else "N/A"
+        f1_neu = f"{r['test_f1_neu']:.4f}" if r['test_f1_neu'] else "N/A"
+        f1_pos = f"{r['test_f1_pos']:.4f}" if r['test_f1_pos'] else "N/A"
         epoch = r['best_epoch'] if r['best_epoch'] else "N/A"
-        ts = r['timestamp'].strftime('%Y-%m-%d %H:%M') if r['timestamp'] else "N/A"
 
-        report += f"| {r['description']} | {r['batch_size']} | {acc} | {f1} | {epoch} | {ts} |\n"
+        report += f"| {r['description']} | {r['batch_size']} | {acc} | {f1} | {f1_neg} | {f1_neu} | {f1_pos} | {epoch} |\n"
 
     # 找出最佳模型
     valid_results = [r for r in results if r['test_acc']]
@@ -132,7 +144,11 @@ def print_summary(results):
         print(f"【{r['description']}】")
         if r['test_acc']:
             print(f"  Test Accuracy: {r['test_acc']:.4f}")
-            print(f"  Test F1: {r['test_f1']:.4f}")
+            print(f"  Test F1 (Macro): {r['test_f1']:.4f}")
+            if r['test_f1_neg']:
+                print(f"    - Negative F1: {r['test_f1_neg']:.4f}")
+                print(f"    - Neutral F1:  {r['test_f1_neu']:.4f}")
+                print(f"    - Positive F1: {r['test_f1_pos']:.4f}")
             print(f"  Best Epoch: {r['best_epoch']}")
         else:
             print(f"  未找到實驗結果")
@@ -218,7 +234,10 @@ def main():
             'Type': r['type'],
             'Batch_Size': r['batch_size'],
             'Test_Accuracy': r['test_acc'],
-            'Test_F1': r['test_f1'],
+            'Test_F1_Macro': r['test_f1'],
+            'Test_F1_Negative': r['test_f1_neg'],
+            'Test_F1_Neutral': r['test_f1_neu'],
+            'Test_F1_Positive': r['test_f1_pos'],
             'Best_Epoch': r['best_epoch'],
             'Timestamp': r['timestamp']
         })

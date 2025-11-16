@@ -1,0 +1,60 @@
+# Full Model: PMAC + IARM (Optimized)
+# 基於實驗A的最佳配置 (gate_bias_init = -1.0)
+# 實驗結果: Test F1 = 0.7098, Gate Mean = 0.238 (最佳平衡)
+
+experiment_name: "full_model_optimized"
+
+# 模型配置
+model:
+  baseline: null  # 不使用 baseline
+  bert_model: "distilbert-base-uncased"
+  freeze_bert: false
+  hidden_dim: 768
+  dropout: 0.3
+
+  # PMAC 配置（基於實驗對比優化）
+  # 實驗結果：
+  #   gate_bias_init = -3.0: Gate Mean 0.054, F1 0.694 (太稀疏)
+  #   gate_bias_init = -1.0: Gate Mean 0.238, F1 0.710 ✅ (最佳)
+  #   gate_bias_init = -0.5: Gate Mean 0.400, F1 0.679 (過度激活)
+  use_pmac: true
+  gate_bias_init: -1.0  # 實驗證明的最佳值 (sigmoid ≈ 0.27)
+  gate_weight_gain: 0.5  # 實驗A使用的值（適中）
+  gate_sparsity_weight: 0.0
+  gate_sparsity_type: "l1"
+
+  # IARM 配置
+  use_iarm: true
+  iarm_heads: 4
+  iarm_layers: 2
+
+# 數據配置
+data:
+  min_aspects: 2
+  max_aspects: 8
+  include_single_aspect: true
+  virtual_aspect_mode: "overall"
+  max_text_len: 128
+  max_aspect_len: 10
+
+# 訓練配置
+training:
+  batch_size: 32
+  accumulation_steps: 1
+  epochs: 30
+  lr: 2.0e-5
+  weight_decay: 0.01
+  grad_clip: 1.0
+  patience: 20  # 進一步增加 patience（從15→20）
+
+  # 調度器
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 損失函數
+  loss_type: "focal"
+  focal_gamma: 2.5
+  class_weights: [1.0, 8.0, 1.0]  # 增加 Neutral 權重（從5.0→8.0）改善最弱類別
+
+  # Virtual aspect
+  virtual_weight: 0.5

@@ -446,8 +446,8 @@ def run_all_baselines():
             "--lr", "2e-5",
             "--dropout", "0.3",
             "--loss_type", "focal",
-            "--focal_gamma", "2.0",
-            "--class_weights", "1.0", "3.0", "1.0"
+            "--focal_gamma", "2.5",  # 與 Full Model 一致
+            "--class_weights", "1.0", "5.0", "1.0"  # 與 Full Model 一致
         ]
 
         try:
