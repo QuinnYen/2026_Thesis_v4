@@ -36,6 +36,9 @@ from models.iarm_enhanced import IARMMultiAspect
 from models.base_model import BaseModel, MLP
 from utils.focal_loss import get_loss_function
 
+# Import baseline models
+from baselines import create_baseline
+
 
 class HMACNetMultiAspect(BaseModel):
     """
@@ -453,7 +456,7 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     all_gates = []  # 收集所有gate值
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating"):
+        for batch in tqdm(dataloader, desc="Evaluating", ascii=True):
             text_ids = batch['text_input_ids'].to(device)
             text_mask = batch['text_attention_mask'].to(device)
             aspect_ids = batch['aspect_input_ids'].to(device)
@@ -539,12 +542,24 @@ def train_multiaspect_model(args):
     project_root = Path(__file__).parent.parent
 
     # 實驗名稱（基於配置）
-    exp_name = f"{'pmac' if args.use_pmac else 'nopmac'}_{'iarm' if args.use_iarm else 'noiarm'}"
-    exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
-    exp_name += f"_{args.loss_type}"
+    if args.baseline:
+        # Baseline 實驗
+        exp_name = f"baseline_{args.baseline}"
+        exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
+        exp_name += f"_{args.loss_type}"
+    else:
+        # Full Model 實驗
+        exp_name = f"{'pmac' if args.use_pmac else 'nopmac'}_{'iarm' if args.use_iarm else 'noiarm'}"
+        exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
+        exp_name += f"_{args.loss_type}"
 
     # 時間戳實驗資料夾
-    exp_dir = project_root / 'results' / 'experiments' / f"{timestamp}_{exp_name}"
+    # Baseline 實驗保存在 results/baseline/ 下，其他實驗保存在 results/experiments/ 下
+    if args.baseline:
+        exp_dir = project_root / 'results' / 'baseline' / f"{timestamp}_{exp_name}"
+    else:
+        exp_dir = project_root / 'results' / 'experiments' / f"{timestamp}_{exp_name}"
+
     checkpoints_dir = exp_dir / 'checkpoints'
     visualizations_dir = exp_dir / 'visualizations'
     reports_dir = exp_dir / 'reports'
@@ -604,28 +619,48 @@ def train_multiaspect_model(args):
 
     # 創建模型
     print("\n" + "="*80)
-    print("創建 Multi-Aspect HMAC-Net")
-    print("="*80)
-    model = HMACNetMultiAspect(
-        bert_model_name=args.bert_model,
-        freeze_bert=args.freeze_bert,
-        hidden_dim=args.hidden_dim,
-        num_classes=3,
-        dropout=args.dropout,
-        use_pmac=args.use_pmac,
-        gate_bias_init=args.gate_bias_init,
-        gate_weight_gain=args.gate_weight_gain,
-        use_iarm=args.use_iarm,
-        iarm_num_heads=args.iarm_heads,
-        iarm_num_layers=args.iarm_layers
-    ).to(device)
 
-    print(f"\n模型配置:")
-    print(f"  BERT: {args.bert_model}")
-    print(f"  Hidden dim: {args.hidden_dim}")
-    print(f"  Dropout: {args.dropout}")
-    print(f"  PMAC: {'Enabled (Selective)' if args.use_pmac else 'Disabled'}")
-    print(f"  IARM: {'Enabled (Transformer)' if args.use_iarm else 'Disabled'}")
+    # 根據 baseline 參數選擇模型
+    if args.baseline:
+        print(f"創建 Baseline 模型: {args.baseline}")
+        print("="*80)
+        model = create_baseline(
+            baseline_type=args.baseline,
+            bert_model_name=args.bert_model,
+            freeze_bert=args.freeze_bert,
+            hidden_dim=args.hidden_dim,
+            num_classes=3,
+            dropout=args.dropout
+        ).to(device)
+
+        print(f"\n模型配置:")
+        print(f"  模型類型: Baseline - {args.baseline}")
+        print(f"  BERT: {args.bert_model}")
+        print(f"  Dropout: {args.dropout}")
+
+    else:
+        print("創建 Multi-Aspect HMAC-Net (Full Model)")
+        print("="*80)
+        model = HMACNetMultiAspect(
+            bert_model_name=args.bert_model,
+            freeze_bert=args.freeze_bert,
+            hidden_dim=args.hidden_dim,
+            num_classes=3,
+            dropout=args.dropout,
+            use_pmac=args.use_pmac,
+            gate_bias_init=args.gate_bias_init,
+            gate_weight_gain=args.gate_weight_gain,
+            use_iarm=args.use_iarm,
+            iarm_num_heads=args.iarm_heads,
+            iarm_num_layers=args.iarm_layers
+        ).to(device)
+
+        print(f"\n模型配置:")
+        print(f"  BERT: {args.bert_model}")
+        print(f"  Hidden dim: {args.hidden_dim}")
+        print(f"  Dropout: {args.dropout}")
+        print(f"  PMAC: {'Enabled (Selective)' if args.use_pmac else 'Disabled'}")
+        print(f"  IARM: {'Enabled (Transformer)' if args.use_iarm else 'Disabled'}")
 
     print(f"\n訓練配置:")
     print(f"  Batch size: {args.batch_size}")
@@ -698,7 +733,7 @@ def train_multiaspect_model(args):
         train_loss = 0
         train_steps = 0
 
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}", ascii=True)
         for batch_idx, batch in enumerate(progress_bar):
             text_ids = batch['text_input_ids'].to(device)
             text_mask = batch['text_attention_mask'].to(device)
@@ -785,8 +820,8 @@ def train_multiaspect_model(args):
             best_epoch = epoch + 1
             patience_counter = 0
 
-            # 如果使用Selective PMAC，收集gate統計
-            if args.use_pmac:
+            # 如果使用Selective PMAC，收集gate統計 (baseline 沒有 gate)
+            if args.use_pmac and not args.baseline:
                 print("\n  [Gate Analysis] 收集Selective PMAC的gate統計...")
                 gate_metrics = evaluate_multi_aspect(model, val_loader, device, loss_fn_for_eval, args, collect_gates=True)
                 if 'gate_stats' in gate_metrics:
@@ -819,8 +854,8 @@ def train_multiaspect_model(args):
     model.load_state_dict(torch.load(best_model_path))
 
     # 測試集評估（也計算 loss）
-    # 如果使用Selective PMAC，收集gate統計
-    collect_test_gates = args.use_pmac  # Selective PMAC 總是收集 gate 統計
+    # 如果使用Selective PMAC，收集gate統計 (baseline 沒有 gate)
+    collect_test_gates = args.use_pmac and not args.baseline  # Selective PMAC 總是收集 gate 統計
     loss_fn_for_eval = loss_fn if args.loss_type != 'ce' else None
     test_metrics = evaluate_multi_aspect(model, test_loader, device, loss_fn_for_eval, args, collect_gates=collect_test_gates)
 
@@ -881,8 +916,12 @@ def train_multiaspect_model(args):
 
         f.write("實驗配置:\n")
         f.write(f"  實驗名稱: {exp_name}\n")
-        f.write(f"  PMAC: {'Enabled' if args.use_pmac else 'Disabled'}\n")
-        f.write(f"  IARM: {'Enabled' if args.use_iarm else 'Disabled'}\n")
+        if args.baseline:
+            f.write(f"  模型類型: Baseline - {args.baseline}\n")
+        else:
+            f.write(f"  模型類型: Full HMAC-Net\n")
+            f.write(f"  PMAC: {'Enabled' if args.use_pmac else 'Disabled'}\n")
+            f.write(f"  IARM: {'Enabled' if args.use_iarm else 'Disabled'}\n")
         f.write(f"  Dropout: {args.dropout}\n")
         f.write(f"  Batch Size: {args.batch_size} x {args.accumulation_steps} = {args.batch_size * args.accumulation_steps}\n")
         f.write(f"  Loss Type: {args.loss_type}\n")
@@ -931,6 +970,12 @@ def main():
                         help='最大文本長度')
     parser.add_argument('--max_aspect_len', type=int, default=10,
                         help='最大 aspect 長度')
+
+    # 模型類型選擇
+    parser.add_argument('--baseline', type=str, default=None,
+                        choices=['bert_only', 'bert_aaha', 'bert_mean'],
+                        help='使用 baseline 模型 (bert_only, bert_aaha, bert_mean)。'
+                             '如果不指定，則使用完整的 HMAC-Net')
 
     # 模型參數
     parser.add_argument('--bert_model', type=str, default='distilbert-base-uncased',

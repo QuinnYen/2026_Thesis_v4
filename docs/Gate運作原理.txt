@@ -25,6 +25,7 @@ Gate 矩陣範例：
 gate[service][ambiance] = 0.45：service 會中度受到 ambiance 影響
 gate[food][service] = 0.15：food 輕微受到 service 影響
 gate[ambiance][food] = 0.05：ambiance 幾乎不受 food 影響
+
 2. Gate 如何影響特徵組合
 # 對於 food aspect：
 food_final = food_original + 
@@ -45,6 +46,8 @@ influence_from_ambiance = 0.08 × [0.1, 0.3, 0.2, ...] = [0.008, 0.024, 0.016, .
 
 # 最終特徵
 food_final = food_original + influence_from_service + influence_from_ambiance
+
+
 📈 Gate 統計結果的意義
 當訓練完成後，您會看到這樣的統計：
 Selective PMAC Gate Statistics:
@@ -102,6 +105,8 @@ Gate Statistics:
 
 Interpretation:
   ✓ High sparsity: Most aspects remain independent
+  
+  
 💡 實際應用意義
 範例：餐廳評論
 評論："The food was excellent but the service was terrible."
@@ -124,6 +129,8 @@ Gate 分析：
 - 所有 aspects 互相影響
 - food 的 positive 可能影響 service 的預測
 - 導致 service 被錯誤預測為 neutral 而非 negative ✗
+
+
 🎓 論文中如何呈現
 Table: Selective PMAC Gate Statistics
 Dataset	Mean	Median	Sparsity	Activation	Interpretation

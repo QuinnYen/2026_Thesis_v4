@@ -2,3 +2,5 @@
 /.venv
 /data
 /results/experiments/**/checkpoints/
+/results/baseline
+/results/baseline_comparison/
