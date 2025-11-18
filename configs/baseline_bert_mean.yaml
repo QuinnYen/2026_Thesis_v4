@@ -34,10 +34,10 @@ training:
   use_scheduler: true
   warmup_ratio: 0.1
 
-  # 损失函数（与其他 baseline 完全一致）
+  # 损失函数（与完整模型完全一致）
   loss_type: "focal"
   focal_gamma: 2.5
-  class_weights: [1.0, 5.0, 1.0]  # [Neg, Neu, Pos]
+  class_weights: [1.0, 8.0, 1.0]  # [Neg, Neu, Pos] - 與完整模型一致
 
   # Virtual aspect
   virtual_weight: 0.5

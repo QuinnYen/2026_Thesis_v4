@@ -16,7 +16,8 @@ from pathlib import Path
 import sys
 from tqdm import tqdm
 import numpy as np
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.preprocessing import label_binarize
 import json
 from datetime import datetime
 import matplotlib
@@ -452,6 +453,7 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
 
     valid_preds = []
     valid_labels = []
+    valid_probs = []  # 收集預測概率（用於 AUC）
     total_loss = 0.0
     num_batches = 0
     all_gates = []  # 收集所有gate值
@@ -489,10 +491,12 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
 
             # 預測
             preds = torch.argmax(logits, dim=-1)  # [batch, max_aspects]
+            probs = torch.softmax(logits, dim=-1)  # [batch, max_aspects, num_classes] 用於 AUC
 
             # 直接展開為 aspect-level（過濾無效和虛擬 aspects）
             preds_cpu = preds.cpu()
             labels_cpu = labels.cpu()
+            probs_cpu = probs.cpu()
             mask_cpu = aspect_mask.cpu()
 
             for i in range(preds_cpu.size(0)):
@@ -500,6 +504,7 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
                     if mask_cpu[i, j] and labels_cpu[i, j] != -100:
                         valid_preds.append(preds_cpu[i, j].item())
                         valid_labels.append(labels_cpu[i, j].item())
+                        valid_probs.append(probs_cpu[i, j].numpy())  # [num_classes]
 
     # 計算指標
     accuracy = accuracy_score(valid_labels, valid_preds)
@@ -509,6 +514,35 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
 
     # 每類 F1
     f1_per_class = f1_score(valid_labels, valid_preds, average=None, zero_division=0)
+
+    # 計算 AUC (macro 和 weighted)
+    auc_macro = None
+    auc_weighted = None
+    try:
+        # 將概率轉換為 numpy array
+        valid_probs_array = np.array(valid_probs)  # [num_samples, num_classes]
+        valid_labels_array = np.array(valid_labels)
+
+        # 計算每個類別的樣本數
+        unique_labels = np.unique(valid_labels_array)
+
+        # 只有當至少有 2 個類別時才計算 AUC
+        if len(unique_labels) >= 2:
+            # One-vs-Rest AUC
+            auc_macro = roc_auc_score(
+                valid_labels_array,
+                valid_probs_array,
+                multi_class='ovr',
+                average='macro'
+            )
+            auc_weighted = roc_auc_score(
+                valid_labels_array,
+                valid_probs_array,
+                multi_class='ovr',
+                average='weighted'
+            )
+    except Exception as e:
+        print(f"  警告: 無法計算 AUC ({str(e)})")
 
     # 計算平均 loss
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
@@ -524,7 +558,9 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
         'f1_macro': f1_macro,
         'precision': precision,
         'recall': recall,
-        'f1_per_class': f1_per_class.tolist()
+        'f1_per_class': f1_per_class.tolist(),
+        'auc_macro': auc_macro,
+        'auc_weighted': auc_weighted
     }
 
     if gate_analysis is not None:
@@ -555,9 +591,9 @@ def train_multiaspect_model(args):
         exp_name += f"_{args.loss_type}"
 
     # 時間戳實驗資料夾
-    # Baseline 實驗保存在 results/baseline/ 下，其他實驗保存在 results/experiments/ 下
+    # Baseline 實驗保存在 results/baseline/{dataset}/ 下，其他實驗保存在 results/experiments/ 下
     if args.baseline:
-        exp_dir = project_root / 'results' / 'baseline' / f"{timestamp}_{exp_name}"
+        exp_dir = project_root / 'results' / 'baseline' / args.dataset / f"{timestamp}_{exp_name}"
     else:
         exp_dir = project_root / 'results' / 'experiments' / f"{timestamp}_{exp_name}"
 

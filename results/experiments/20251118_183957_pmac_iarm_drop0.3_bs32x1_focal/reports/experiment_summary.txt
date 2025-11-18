@@ -1,0 +1,34 @@
+================================================================================
+實驗摘要 - 20251118_183957
+================================================================================
+
+實驗配置:
+  實驗名稱: pmac_iarm_drop0.3_bs32x1_focal
+  模型類型: Full HMAC-Net
+  PMAC: Enabled
+  IARM: Enabled
+  Dropout: 0.3
+  Batch Size: 32 x 1 = 32
+  Loss Type: focal
+  Learning Rate: 2e-05
+  Epochs: 30
+
+訓練結果:
+  Best Epoch: 11
+  Best Val F1: 0.7108
+  Test Accuracy: 0.7663
+  Test F1 (Macro): 0.7268
+  Test Precision: 0.7293
+  Test Recall: 0.7247
+
+Per-Class Test F1:
+  Negative: 0.6769
+  Neutral:  0.6375
+  Positive: 0.8660
+
+文件路徑:
+  實驗資料夾: D:\Quinn_SmallHouse\2026_Thesis_v4\results\experiments\20251118_183957_pmac_iarm_drop0.3_bs32x1_focal
+  最佳模型: D:\Quinn_SmallHouse\2026_Thesis_v4\results\experiments\20251118_183957_pmac_iarm_drop0.3_bs32x1_focal\checkpoints\best_model_epoch11_f1_0.7108.pt
+  結果JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\experiments\20251118_183957_pmac_iarm_drop0.3_bs32x1_focal\reports\experiment_results.json
+  配置JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\experiments\20251118_183957_pmac_iarm_drop0.3_bs32x1_focal\reports\experiment_config.json
+  可視化: D:\Quinn_SmallHouse\2026_Thesis_v4\results\experiments\20251118_183957_pmac_iarm_drop0.3_bs32x1_focal\visualizations

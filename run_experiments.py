@@ -2,11 +2,13 @@
 批次執行實驗腳本
 
 使用方法:
-    python run_experiments.py --all                    # 執行所有實驗
-    python run_experiments.py --baselines              # 只執行 baseline（含報告生成）
-    python run_experiments.py --full                   # 只執行完整模型
-    python run_experiments.py --ablation               # 執行消融實驗
-    python run_experiments.py --report                 # 只生成 baseline 報告（不執行訓練）
+    python run_experiments.py --all --dataset restaurants         # 執行所有實驗
+    python run_experiments.py --baselines --dataset restaurants   # 只執行 baseline（含報告生成）
+    python run_experiments.py --full --dataset laptops            # 只執行完整模型
+    python run_experiments.py --ablation --dataset laptops        # 執行消融實驗
+    python run_experiments.py --report --dataset restaurants      # 只生成 baseline 報告（不執行訓練）
+
+注意: --dataset 參數為必填項，可選擇 restaurants 或 laptops
 """
 
 import subprocess
@@ -14,17 +16,19 @@ import argparse
 from pathlib import Path
 import sys
 
-def run_experiment(config_path, description):
+def run_experiment(config_path, description, dataset):
     """執行單個實驗"""
     print(f"\n{'='*80}")
     print(f"開始實驗: {description}")
     print(f"配置文件: {config_path}")
+    print(f"數據集: {dataset.upper()}")
     print(f"{'='*80}\n")
 
     cmd = [
         sys.executable,
         "experiments/train_from_config.py",
-        "--config", str(config_path)
+        "--config", str(config_path),
+        "--dataset", dataset
     ]
 
     try:
@@ -39,15 +43,16 @@ def run_experiment(config_path, description):
         return False
 
 
-def generate_baseline_report():
+def generate_baseline_report(dataset):
     """生成 baseline 比較報告"""
     print(f"\n{'='*80}")
-    print("生成 Baseline 比較報告")
+    print(f"生成 Baseline 比較報告 - {dataset.upper()}")
     print(f"{'='*80}\n")
 
     cmd = [
         sys.executable,
-        "experiments/generate_baseline_report.py"
+        "experiments/generate_baseline_report.py",
+        "--dataset", dataset
     ]
 
     try:
@@ -70,12 +75,15 @@ def main():
     parser.add_argument('--ablation', action='store_true', help='執行消融實驗')
     parser.add_argument('--report', action='store_true', help='只生成 baseline 報告（不執行訓練）')
     parser.add_argument('--config', type=str, help='單獨執行指定配置文件')
+    parser.add_argument('--dataset', type=str, required=True,
+                        choices=['restaurants', 'laptops'],
+                        help='數據集選擇 (restaurants 或 laptops)')
 
     args = parser.parse_args()
 
     # 只生成報告模式
     if args.report:
-        generate_baseline_report()
+        generate_baseline_report(args.dataset)
         return
 
     configs_dir = Path("configs")
@@ -129,7 +137,7 @@ def main():
             continue
 
         total_count += 1
-        if run_experiment(config_path, description):
+        if run_experiment(config_path, description, args.dataset):
             success_count += 1
 
     # 總結
@@ -144,7 +152,7 @@ def main():
     # 如果執行了 baseline 實驗，自動生成報告
     if is_baseline_mode and success_count > 0:
         print("\n開始生成 Baseline 比較報告...\n")
-        generate_baseline_report()
+        generate_baseline_report(args.dataset)
 
 
 if __name__ == "__main__":
