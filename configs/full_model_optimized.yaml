@@ -1,8 +1,11 @@
-# Full Model: PMAC + IARM (Optimized)
-# 基於實驗A的最佳配置 (gate_bias_init = -1.0)
-# 實驗結果: Test F1 = 0.7098, Gate Mean = 0.238 (最佳平衡)
+# Full Model: PMAC + IARM (Enhanced with Data Augmentation & Balanced Regularization)
+# 配置更新 v2 (2025-11-19 修正):
+#   - 啟用數據增強 (訓練集增加 ~84%)
+#   - 平衡正則化 (Dropout 0.4, Label Smoothing 0.05)
+#   - Weight Decay 提升至 0.05
+#   - Patience 調至 12 (避免過早停止)
 
-experiment_name: "full_model_optimized"
+experiment_name: "full_model_balanced"
 
 # 模型配置
 model:
@@ -10,7 +13,7 @@ model:
   bert_model: "distilbert-base-uncased"
   freeze_bert: false
   hidden_dim: 768
-  dropout: 0.3
+  dropout: 0.4  # 從 0.5 降至 0.4 (平衡正則化強度)
 
   # PMAC 配置（基於實驗對比優化）
   # 實驗結果：
@@ -30,6 +33,7 @@ model:
 
 # 數據配置
 data:
+  use_augmented: true  # ✅ 啟用數據增強 (訓練集 +84%)
   min_aspects: 2
   max_aspects: 8
   include_single_aspect: true
@@ -43,9 +47,10 @@ training:
   accumulation_steps: 1
   epochs: 30
   lr: 2.0e-5
-  weight_decay: 0.01
+  weight_decay: 0.05  # 維持 L2 正則化
   grad_clip: 1.0
-  patience: 20  # 進一步增加 patience（從15→20）
+  patience: 12  # 從 8 提升至 12 (避免過早停止)
+  seed: 42  # ✅ 固定隨機種子（確保可重現性）
 
   # 調度器
   use_scheduler: true
@@ -54,7 +59,8 @@ training:
   # 損失函數
   loss_type: "focal"
   focal_gamma: 2.5
-  class_weights: [1.0, 8.0, 1.0]  # 增加 Neutral 權重（從5.0→8.0）改善最弱類別
+  label_smoothing: 0.05  # 從 0.1 降至 0.05 (減少平滑影響)
+  class_weights: [1.0, 8.0, 1.0]  # 增加 Neutral 權重改善最弱類別
 
   # Virtual aspect
   virtual_weight: 0.5

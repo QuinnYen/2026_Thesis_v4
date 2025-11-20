@@ -1,0 +1,46 @@
+# Baseline: Hierarchical BERT on SemEval
+# 階層式BERT：利用BERT不同層的階層特性
+# 論文創新點：Multi-level feature fusion for aspect-based sentiment analysis
+
+experiment_name: "baseline_bert_hierarchical"
+
+# 模型配置
+model:
+  baseline: "bert_hierarchical"  # 新的階層式BERT baseline
+  bert_model: "distilbert-base-uncased"
+  freeze_bert: false
+  hidden_dim: 768
+  dropout: 0.4
+
+# 數據配置
+data:
+  use_augmented: true  # 使用數據增強
+  min_aspects: 2
+  max_aspects: 8
+  include_single_aspect: true  # SemEval包含單aspect
+  virtual_aspect_mode: "overall"
+  max_text_len: 128
+  max_aspect_len: 10
+
+# 訓練配置
+training:
+  batch_size: 32  # 與BERT Only相同
+  accumulation_steps: 1
+  epochs: 30
+  lr: 2.0e-5
+  weight_decay: 0.05
+  grad_clip: 1.0
+  patience: 12
+  seed: 42
+
+  # 調度器
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 損失函數（與其他baseline完全一致）
+  loss_type: "focal"
+  focal_gamma: 2.5
+  class_weights: [1.0, 8.0, 1.0]
+
+  # Virtual aspect
+  virtual_weight: 0.5

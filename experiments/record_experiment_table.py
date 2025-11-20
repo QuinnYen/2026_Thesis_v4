@@ -72,7 +72,9 @@ def infer_dataset_from_path(exp_path):
     path_lower = exp_path.lower()
 
     # 檢查路徑中是否包含數據集名稱
-    if 'restaurant' in path_lower:
+    if 'mams' in path_lower:
+        return 'MAMS'
+    elif 'restaurant' in path_lower:
         return 'restaurants'
     elif 'laptop' in path_lower:
         return 'laptops'
@@ -151,6 +153,8 @@ def get_model_name(exp_info, metrics):
         return 'BERT + AAHA'
     elif baseline == 'bert_mean':
         return 'BERT + Mean'
+    elif baseline == 'bert_hierarchical':
+        return 'Hierarchical BERT'
     elif use_pmac and use_iarm:
         return 'Full (PMAC + IARM)'
     elif use_pmac:
@@ -202,8 +206,16 @@ def generate_comparison_table(experiments_data):
             datasets[dataset] = []
         datasets[dataset].append(exp)
 
-    # 為每個 dataset 生成表格
-    for dataset, exps in sorted(datasets.items()):
+    # 為每個 dataset 生成表格（MAMS 優先，然後按字母順序）
+    def dataset_sort_key(item):
+        dataset, _ = item
+        # MAMS 優先（排序值 0），其他按字母順序（排序值 1+）
+        if dataset.upper() == 'MAMS':
+            return (0, dataset)
+        else:
+            return (1, dataset)
+
+    for dataset, exps in sorted(datasets.items(), key=dataset_sort_key):
         lines.append(f"\n## {dataset.upper()} 數據集\n")
 
         # 主要結果表格

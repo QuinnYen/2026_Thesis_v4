@@ -29,6 +29,7 @@ import seaborn as sns
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data.semeval_multiaspect import load_multiaspect_data
+from data.mams_multiaspect import load_mams_data
 from data.augmented_dataset import load_augmented_data
 from data.multiaspect_dataset import create_multiaspect_dataloaders
 from models.bert_embedding import BERTForABSA
@@ -624,39 +625,66 @@ def train_multiaspect_model(args):
         train_xml = 'Laptop_Train_v2.xml'
         test_xml = 'Laptops_Test_Gold.xml'
         default_aug_dir = 'data/augmented_laptops'
+    elif args.dataset == 'mams':
+        # MAMS 已經有分割好的 train/val/test
+        train_xml = 'train.xml'
+        val_xml = 'val.xml'
+        test_xml = 'test.xml'
+        default_aug_dir = None  # MAMS 暫不支持數據增強
     else:
         raise ValueError(f"不支援的數據集: {args.dataset}")
 
     print(f"數據集: {args.dataset.upper()}")
 
-    # 檢查是否使用增強數據
-    use_augmented = getattr(args, 'use_augmented', False)
+    # MAMS 數據集的特殊處理
+    if args.dataset == 'mams':
+        print("使用 MAMS-ATSA 數據集 (100% 多面向場景)")
+        print("注意: MAMS 已包含預分割的 train/val/test，不使用數據增強")
 
-    if use_augmented:
-        print("使用增強數據集 (EDA Augmentation)")
-        # 如果未指定 augmented_dir，使用默認值
-        augmented_dir = args.augmented_dir if args.augmented_dir else default_aug_dir
-        print(f"增強數據目錄: {augmented_dir}")
-        train_all_samples, test_samples = load_augmented_data(augmented_dir)
-    else:
-        print("使用原始數據集")
-        # 數據路徑
-        train_path = project_root / 'data' / 'raw' / 'semeval2014' / train_xml
-        test_path = project_root / 'data' / 'raw' / 'semeval2014' / test_xml
+        # MAMS 數據路徑
+        train_path = project_root / 'data' / 'raw' / 'MAMS-ATSA' / train_xml
+        val_path = project_root / 'data' / 'raw' / 'MAMS-ATSA' / val_xml
+        test_path = project_root / 'data' / 'raw' / 'MAMS-ATSA' / test_xml
 
-        train_all_samples, test_samples = load_multiaspect_data(
+        train_samples, val_samples, test_samples = load_mams_data(
             train_path=str(train_path),
+            val_path=str(val_path),
             test_path=str(test_path),
             min_aspects=args.min_aspects,
             max_aspects=args.max_aspects,
             include_single_aspect=args.include_single_aspect,
             virtual_aspect_mode=args.virtual_aspect_mode
         )
+    else:
+        # SemEval 數據集處理
+        # 檢查是否使用增強數據
+        use_augmented = getattr(args, 'use_augmented', False)
 
-    # 分割驗證集
-    val_size = int(0.1 * len(train_all_samples))
-    val_samples = train_all_samples[:val_size]
-    train_samples = train_all_samples[val_size:]
+        if use_augmented:
+            print("使用增強數據集 (EDA Augmentation)")
+            # 如果未指定 augmented_dir，使用默認值
+            augmented_dir = args.augmented_dir if args.augmented_dir else default_aug_dir
+            print(f"增強數據目錄: {augmented_dir}")
+            train_all_samples, test_samples = load_augmented_data(augmented_dir)
+        else:
+            print("使用原始數據集")
+            # 數據路徑
+            train_path = project_root / 'data' / 'raw' / 'semeval2014' / train_xml
+            test_path = project_root / 'data' / 'raw' / 'semeval2014' / test_xml
+
+            train_all_samples, test_samples = load_multiaspect_data(
+                train_path=str(train_path),
+                test_path=str(test_path),
+                min_aspects=args.min_aspects,
+                max_aspects=args.max_aspects,
+                include_single_aspect=args.include_single_aspect,
+                virtual_aspect_mode=args.virtual_aspect_mode
+            )
+
+        # 分割驗證集 (SemEval only)
+        val_size = int(0.1 * len(train_all_samples))
+        val_samples = train_all_samples[:val_size]
+        train_samples = train_all_samples[val_size:]
 
     print(f"\n數據分割:")
     print(f"  訓練: {len(train_samples)}")
@@ -1021,8 +1049,8 @@ def main():
 
     # 數據參數
     parser.add_argument('--dataset', type=str, required=True,
-                        choices=['restaurants', 'laptops'],
-                        help='數據集選擇 (restaurants 或 laptops)')
+                        choices=['restaurants', 'laptops', 'mams'],
+                        help='數據集選擇 (restaurants, laptops, 或 mams)')
     parser.add_argument('--use_augmented', action='store_true', default=False,
                         help='使用增強數據集 (EDA Augmentation)')
     parser.add_argument('--augmented_dir', type=str, default=None,
@@ -1033,6 +1061,8 @@ def main():
                         help='最大 aspect 數量（超過則截斷）')
     parser.add_argument('--include_single_aspect', action='store_true', default=True,
                         help='是否包含單 aspect（帶虛擬 aspect）')
+    parser.add_argument('--no_include_single_aspect', action='store_false', dest='include_single_aspect',
+                        help='禁用單 aspect 樣本')
     parser.add_argument('--virtual_aspect_mode', type=str, default='overall',
                         choices=['overall', 'context', 'none'],
                         help='虛擬 aspect 模式')
@@ -1043,8 +1073,8 @@ def main():
 
     # 模型類型選擇
     parser.add_argument('--baseline', type=str, default=None,
-                        choices=['bert_only', 'bert_aaha', 'bert_mean'],
-                        help='使用 baseline 模型 (bert_only, bert_aaha, bert_mean)。'
+                        choices=['bert_only', 'bert_aaha', 'bert_mean', 'bert_hierarchical'],
+                        help='使用 baseline 模型 (bert_only, bert_aaha, bert_mean, bert_hierarchical)。'
                              '如果不指定，則使用完整的 HMAC-Net')
 
     # 模型參數
@@ -1104,10 +1134,25 @@ def main():
                         help='Loss function type: ce (CrossEntropy), focal (FocalLoss), adaptive (AdaptiveWeighted)')
     parser.add_argument('--focal_gamma', type=float, default=2.0,
                         help='Focal loss gamma parameter (default: 2.0, 0=CE)')
+    parser.add_argument('--label_smoothing', type=float, default=0.0,
+                        help='Label smoothing factor (default: 0.0, range: 0.0-1.0)')
     parser.add_argument('--class_weights', type=float, nargs=3, default=None,
                         help='Class weights [neg, neu, pos], e.g., --class_weights 1.0 2.0 1.0')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='隨機種子（default: 42）')
 
     args = parser.parse_args()
+
+    # 設置隨機種子（確保可重現性）
+    import random
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+    # 確保 CUDA 的確定性行為
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    print(f"\n[OK] 隨機種子已設置: {args.seed}")
 
     print("\n" + "="*80)
     print("Multi-Aspect HMAC-Net 訓練")

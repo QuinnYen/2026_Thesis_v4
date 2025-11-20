@@ -1,7 +1,7 @@
-# Baseline: BERT Only
+# Baseline: BERT Only - Enhanced with Data Augmentation & Balanced Regularization
 # 最簡單的基線模型配置
 
-experiment_name: "baseline_bert_only"
+experiment_name: "baseline_bert_only_balanced"
 
 # 模型配置
 model:
@@ -9,10 +9,11 @@ model:
   bert_model: "distilbert-base-uncased"
   freeze_bert: false
   hidden_dim: 768
-  dropout: 0.3
+  dropout: 0.4  # 從 0.5 降至 0.4
 
 # 數據配置
 data:
+  use_augmented: true  # ✅ 啟用數據增強
   min_aspects: 2
   max_aspects: 8
   include_single_aspect: true
@@ -26,9 +27,9 @@ training:
   accumulation_steps: 1
   epochs: 30
   lr: 2.0e-5
-  weight_decay: 0.01
+  weight_decay: 0.05  # 維持 L2 正則化
   grad_clip: 1.0
-  patience: 10
+  patience: 12  # 從 8 提升至 12
 
   # 調度器
   use_scheduler: true
@@ -37,6 +38,7 @@ training:
   # 損失函數
   loss_type: "focal"
   focal_gamma: 2.5
+  label_smoothing: 0.05  # 從 0.1 降至 0.05
   class_weights: [1.0, 8.0, 1.0]  # [Neg, Neu, Pos] - 與完整模型一致
 
   # Virtual aspect

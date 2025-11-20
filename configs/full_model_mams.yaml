@@ -1,0 +1,61 @@
+# Full Model: PMAC + IARM on MAMS-ATSA
+# MAMS (Multi-Aspect Multi-Sentiment) 是專門為多面向情感分析設計的數據集：
+#   - 100% 多面向句子（每句≥2 aspects）
+#   - 強制不同情感極性（必須混合正面、負面、中性）
+#   - 訓練集 4,297 樣本（vs SemEval ~1,500）
+#   - 真正展現 PMAC + IARM 架構優勢的場景
+
+experiment_name: "full_model_mams"
+
+# 模型配置
+model:
+  baseline: null  # 不使用 baseline
+  bert_model: "distilbert-base-uncased"
+  freeze_bert: false
+  hidden_dim: 768
+  dropout: 0.4  # 平衡正則化
+
+  # PMAC 配置（實驗證明的最佳值）
+  use_pmac: true
+  gate_bias_init: -1.0  # 實驗證明的最佳值 (sigmoid ≈ 0.27)
+  gate_weight_gain: 0.5
+  gate_sparsity_weight: 0.0
+  gate_sparsity_type: "l1"
+
+  # IARM 配置
+  use_iarm: true
+  iarm_heads: 4
+  iarm_layers: 2
+
+# 數據配置
+data:
+  use_augmented: false  # MAMS 不需要數據增強（已有 4,297 樣本）
+  min_aspects: 2  # MAMS 本身就是多面向場景
+  max_aspects: 8
+  include_single_aspect: false  # MAMS 100% 多面向，不需要虛擬 aspect
+  virtual_aspect_mode: "none"  # MAMS 已經是真實多面向場景
+  max_text_len: 128
+  max_aspect_len: 10
+
+# 訓練配置
+training:
+  batch_size: 32
+  accumulation_steps: 1
+  epochs: 30
+  lr: 2.0e-5
+  weight_decay: 0.05  # L2 正則化
+  grad_clip: 1.0
+  patience: 12  # 避免過早停止
+  seed: 42  # 固定隨機種子（確保可重現性）
+
+  # 調度器
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 損失函數
+  loss_type: "focal"
+  focal_gamma: 2.5
+  class_weights: [1.0, 8.0, 1.0]  # 增加 Neutral 權重
+
+  # Virtual aspect (MAMS 不需要)
+  virtual_weight: 0.5

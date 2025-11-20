@@ -25,7 +25,8 @@ class BERTEmbedding(nn.Module):
         self,
         model_name: str = 'bert-base-uncased',
         freeze: bool = False,
-        pooling: str = 'mean'
+        pooling: str = 'mean',
+        output_hidden_states: bool = False  # 新增：是否輸出所有層的hidden states
     ):
         """
         初始化 BERT 嵌入層
@@ -34,11 +35,13 @@ class BERTEmbedding(nn.Module):
             model_name: BERT 模型名稱
             freeze: 是否凍結 BERT 參數
             pooling: 池化方式 ('mean', 'max', 'cls')
+            output_hidden_states: 是否輸出所有層的hidden states（用於階層模型）
         """
         super(BERTEmbedding, self).__init__()
 
         self.model_name = model_name
         self.pooling = pooling
+        self.output_hidden_states = output_hidden_states
 
         # 檢測模型類型
         self.is_distilbert = 'distilbert' in model_name.lower()
@@ -53,6 +56,11 @@ class BERTEmbedding(nn.Module):
             self.bert = BertModel.from_pretrained(model_name)
             self.tokenizer = BertTokenizer.from_pretrained(model_name)
             print("  類型: BERT")
+
+        # 如果需要輸出多層hidden states，設置配置
+        if output_hidden_states:
+            self.bert.config.output_hidden_states = True
+            print("  階層模式: 啟用多層特徵提取")
 
         # 獲取隱藏層大小
         self.hidden_size = self.bert.config.hidden_size
@@ -114,6 +122,11 @@ class BERTEmbedding(nn.Module):
 
         # 獲取序列輸出 [batch, seq_len, hidden_size]
         sequence_output = outputs.last_hidden_state
+
+        # 如果需要返回所有層的hidden states（用於階層模型）
+        if self.output_hidden_states:
+            all_hidden_states = outputs.hidden_states  # tuple of (num_layers+1) tensors
+            return sequence_output, all_hidden_states
 
         return sequence_output
 

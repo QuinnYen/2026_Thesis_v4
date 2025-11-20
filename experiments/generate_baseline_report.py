@@ -6,6 +6,7 @@
 使用方法:
     python experiments/generate_baseline_report.py --dataset restaurants
     python experiments/generate_baseline_report.py --dataset laptops
+    python experiments/generate_baseline_report.py --dataset mams
 """
 
 import json
@@ -196,8 +197,8 @@ def generate_text_report(dataset, results):
 def main():
     parser = argparse.ArgumentParser(description='生成 Baseline 比較報告')
     parser.add_argument('--dataset', type=str, required=True,
-                        choices=['restaurants', 'laptops'],
-                        help='數據集選擇 (restaurants 或 laptops)')
+                        choices=['restaurants', 'laptops', 'mams'],
+                        help='數據集選擇 (restaurants, laptops, 或 mams)')
     args = parser.parse_args()
 
     project_root = Path(__file__).parent.parent
@@ -208,12 +209,18 @@ def main():
         print(f"請先運行 {args.dataset} 數據集的 baseline 實驗")
         return
 
-    # 定義三個 baseline
-    baseline_info = {
-        'bert_only': ("BERT Only", 32),
-        'bert_aaha': ("BERT + AAHA", 24),
-        'bert_mean': ("BERT + Mean Pooling", 32)
-    }
+    # 定義 baseline（MAMS 只有 2 個，SemEval 有 3 個）
+    if args.dataset == 'mams':
+        baseline_info = {
+            'bert_only': ("BERT Only", 32),
+            'bert_aaha': ("BERT + AAHA", 24),
+        }
+    else:
+        baseline_info = {
+            'bert_only': ("BERT Only", 32),
+            'bert_aaha': ("BERT + AAHA", 24),
+            'bert_mean': ("BERT + Mean Pooling", 32)
+        }
 
     # 查找所有 baseline
     print(f"\n收集 {args.dataset.upper()} Baseline 實驗結果\n")

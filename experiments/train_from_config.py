@@ -96,8 +96,12 @@ def config_to_args(config):
         if 'max_aspects' in data_cfg:
             args.extend(['--max_aspects', str(data_cfg['max_aspects'])])
 
-        if data_cfg.get('include_single_aspect'):
-            args.append('--include_single_aspect')
+        # include_single_aspect 需要明確處理 True/False
+        if 'include_single_aspect' in data_cfg:
+            if data_cfg['include_single_aspect']:
+                args.append('--include_single_aspect')
+            else:
+                args.append('--no_include_single_aspect')  # 明確禁用
 
         if 'virtual_aspect_mode' in data_cfg:
             args.extend(['--virtual_aspect_mode', data_cfg['virtual_aspect_mode']])
@@ -146,6 +150,9 @@ def config_to_args(config):
         if 'focal_gamma' in train_cfg:
             args.extend(['--focal_gamma', str(train_cfg['focal_gamma'])])
 
+        if 'label_smoothing' in train_cfg:
+            args.extend(['--label_smoothing', str(train_cfg['label_smoothing'])])
+
         if 'class_weights' in train_cfg:
             weights = [str(w) for w in train_cfg['class_weights']]
             args.extend(['--class_weights'] + weights)
@@ -153,6 +160,10 @@ def config_to_args(config):
         # Virtual aspect
         if 'virtual_weight' in train_cfg:
             args.extend(['--virtual_weight', str(train_cfg['virtual_weight'])])
+
+        # 隨機種子
+        if 'seed' in train_cfg:
+            args.extend(['--seed', str(train_cfg['seed'])])
 
     return args
 
@@ -162,8 +173,8 @@ def main():
     parser.add_argument('--config', type=str, required=True,
                         help='YAML 配置文件路徑')
     parser.add_argument('--dataset', type=str, required=True,
-                        choices=['restaurants', 'laptops'],
-                        help='數據集選擇 (restaurants 或 laptops)')
+                        choices=['restaurants', 'laptops', 'mams'],
+                        help='數據集選擇 (restaurants, laptops, 或 mams)')
     parser.add_argument('--override', nargs='*', default=[],
                         help='覆蓋配置的額外參數，例如: --override --epochs 50 --lr 3e-5')
 

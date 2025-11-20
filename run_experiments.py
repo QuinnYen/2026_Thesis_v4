@@ -2,13 +2,19 @@
 批次執行實驗腳本
 
 使用方法:
+    # SemEval 數據集
     python run_experiments.py --all --dataset restaurants         # 執行所有實驗
     python run_experiments.py --baselines --dataset restaurants   # 只執行 baseline（含報告生成）
     python run_experiments.py --full --dataset laptops            # 只執行完整模型
     python run_experiments.py --ablation --dataset laptops        # 執行消融實驗
     python run_experiments.py --report --dataset restaurants      # 只生成 baseline 報告（不執行訓練）
 
-注意: --dataset 參數為必填項，可選擇 restaurants 或 laptops
+    # MAMS 數據集（推薦用於主要實驗）⭐
+    python run_experiments.py --all --dataset mams                # 執行 MAMS 所有實驗
+    python run_experiments.py --baselines --dataset mams          # 執行 MAMS baseline
+    python run_experiments.py --full --dataset mams               # 執行 MAMS 完整模型
+
+注意: --dataset 參數為必填項，可選擇 restaurants、laptops 或 mams
 """
 
 import subprocess
@@ -76,8 +82,8 @@ def main():
     parser.add_argument('--report', action='store_true', help='只生成 baseline 報告（不執行訓練）')
     parser.add_argument('--config', type=str, help='單獨執行指定配置文件')
     parser.add_argument('--dataset', type=str, required=True,
-                        choices=['restaurants', 'laptops'],
-                        help='數據集選擇 (restaurants 或 laptops)')
+                        choices=['restaurants', 'laptops', 'mams'],
+                        help='數據集選擇 (restaurants, laptops, 或 mams)')
 
     args = parser.parse_args()
 
@@ -92,24 +98,42 @@ def main():
 
     experiments = []
 
-    # 定義實驗列表
-    if args.all or args.baselines:
-        experiments.extend([
-            (configs_dir / "baseline_bert_only.yaml", "Baseline: BERT Only"),
-            (configs_dir / "baseline_bert_aaha.yaml", "Baseline: BERT + AAHA"),
-            (configs_dir / "baseline_bert_mean.yaml", "Baseline: BERT + Mean Pooling"),
-        ])
+    # 根據數據集選擇對應的配置文件
+    if args.dataset == 'mams':
+        # MAMS 數據集配置
+        if args.all or args.baselines:
+            experiments.extend([
+                (configs_dir / "baseline_bert_only_mams.yaml", "MAMS Baseline: BERT Only"),
+                (configs_dir / "baseline_bert_aaha_mams.yaml", "MAMS Baseline: BERT + AAHA"),
+            ])
 
-    if args.all or args.ablation:
-        experiments.extend([
-            (configs_dir / "pmac_only.yaml", "Ablation: PMAC Only (without IARM)"),
-            # (configs_dir / "iarm_only.yaml", "Ablation: IARM Only (without PMAC)"),  # 需要創建
-        ])
+        if args.all or args.ablation:
+            experiments.extend([
+                (configs_dir / "pmac_only_mams.yaml", "MAMS Ablation: PMAC Only (without IARM)"),
+            ])
 
-    if args.all or args.full:
-        experiments.append(
-            (configs_dir / "full_model_optimized.yaml", "Full Model: PMAC + IARM (Optimized)")
-        )
+        if args.all or args.full:
+            experiments.append(
+                (configs_dir / "full_model_mams.yaml", "MAMS Full Model: PMAC + IARM")
+            )
+    else:
+        # SemEval 數據集配置（restaurants 或 laptops）
+        if args.all or args.baselines:
+            experiments.extend([
+                (configs_dir / "baseline_bert_only.yaml", "Baseline: BERT Only"),
+                (configs_dir / "baseline_bert_aaha.yaml", "Baseline: BERT + AAHA"),
+                (configs_dir / "baseline_bert_mean.yaml", "Baseline: BERT + Mean Pooling"),
+            ])
+
+        if args.all or args.ablation:
+            experiments.extend([
+                (configs_dir / "pmac_only.yaml", "Ablation: PMAC Only (without IARM)"),
+            ])
+
+        if args.all or args.full:
+            experiments.append(
+                (configs_dir / "full_model_optimized.yaml", "Full Model: PMAC + IARM (Optimized)")
+            )
 
     if args.config:
         experiments = [(Path(args.config), f"Custom: {args.config}")]

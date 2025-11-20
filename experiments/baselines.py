@@ -356,6 +356,194 @@ class Baseline_BERT_MeanPooling(BaseModel):
 
 
 # 工廠函數：方便創建不同的 baseline
+class Baseline_HierarchicalBERT(BaseModel):
+    """
+    Baseline 4: Hierarchical BERT (階層式BERT)
+
+    架構:
+        BERT Layers → Extract Multi-Level Features → Hierarchical Fusion → Classifier
+
+    階層:
+        - Low-level (layers 1-2): Syntactic features (詞法特徵)
+        - Mid-level (layers 3-4): Semantic features (語義特徵)
+        - High-level (layers 5-6): Task-specific features (任務特徵)
+
+    特點:
+        - 利用BERT不同層的階層特性
+        - 融合多層級特徵
+        - 簡單、有效、可解釋
+
+    預期:
+        - 優於BERT Only (利用階層信息)
+        - 與AAHA競爭 (但更簡單)
+    """
+
+    def __init__(
+        self,
+        bert_model_name: str = 'distilbert-base-uncased',
+        freeze_bert: bool = False,
+        hidden_dim: int = 768,
+        num_classes: int = 3,
+        dropout: float = 0.1
+    ):
+        super(Baseline_HierarchicalBERT, self).__init__()
+
+        self.hidden_dim = hidden_dim
+        self.num_classes = num_classes
+
+        # BERT with hierarchical output
+        self.bert_absa = BERTForABSA(
+            model_name=bert_model_name,
+            freeze_bert=freeze_bert
+        )
+
+        # Enable output of all hidden states
+        self.bert_absa.bert_embedding.output_hidden_states = True
+        self.bert_absa.bert_embedding.bert.config.output_hidden_states = True
+
+        bert_hidden_size = self.bert_absa.hidden_size
+
+        # Projection if needed
+        if bert_hidden_size != hidden_dim:
+            self.text_projection = nn.Linear(bert_hidden_size, hidden_dim)
+            self.aspect_projection = nn.Linear(bert_hidden_size, hidden_dim)
+        else:
+            self.text_projection = nn.Identity()
+            self.aspect_projection = nn.Identity()
+
+        # Hierarchical fusion layers
+        # DistilBERT has 6 layers, BERT has 12 layers
+        is_distilbert = 'distilbert' in bert_model_name.lower()
+
+        if is_distilbert:
+            # DistilBERT: 6 layers
+            # Low: 1-2, Mid: 3-4, High: 5-6
+            self.low_layers = [1, 2]
+            self.mid_layers = [3, 4]
+            self.high_layers = [5, 6]
+        else:
+            # BERT: 12 layers
+            # Low: 1-4, Mid: 5-8, High: 9-12
+            self.low_layers = [1, 2, 3, 4]
+            self.mid_layers = [5, 6, 7, 8]
+            self.high_layers = [9, 10, 11, 12]
+
+        # Fusion layers for each level
+        self.low_fusion = nn.Sequential(
+            nn.Linear(hidden_dim * len(self.low_layers), hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+        self.mid_fusion = nn.Sequential(
+            nn.Linear(hidden_dim * len(self.mid_layers), hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+        self.high_fusion = nn.Sequential(
+            nn.Linear(hidden_dim * len(self.high_layers), hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+        # Final classifier
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim * 3, hidden_dim),  # 3 levels
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_classes)
+        )
+
+    def forward(
+        self,
+        text_input_ids: torch.Tensor,
+        text_attention_mask: torch.Tensor,
+        aspect_input_ids: torch.Tensor,
+        aspect_attention_mask: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ):
+        """
+        前向傳播
+
+        參數:
+            text_input_ids: [batch, seq_len]
+            text_attention_mask: [batch, seq_len]
+            aspect_input_ids: [batch, max_aspects, aspect_len]
+            aspect_attention_mask: [batch, max_aspects, aspect_len]
+            aspect_mask: [batch, max_aspects] - bool，標記有效 aspects
+
+        返回:
+            logits: [batch, max_aspects, num_classes]
+        """
+        batch_size, max_aspects, aspect_len = aspect_input_ids.shape
+
+        logits_list = []
+
+        for i in range(max_aspects):
+            if aspect_mask[:, i].any():
+                # Concatenate text and aspect
+                combined_ids = torch.cat([
+                    text_input_ids,
+                    aspect_input_ids[:, i, :]
+                ], dim=1)
+
+                combined_mask = torch.cat([
+                    text_attention_mask,
+                    aspect_attention_mask[:, i, :]
+                ], dim=1)
+
+                # Get hierarchical features from BERT
+                outputs = self.bert_absa.bert_embedding.bert(
+                    input_ids=combined_ids,
+                    attention_mask=combined_mask,
+                    return_dict=True
+                )
+
+                all_hidden_states = outputs.hidden_states  # tuple of (num_layers+1) tensors
+
+                # Extract CLS token from different layers
+                # all_hidden_states[0] is embedding layer, so layers start from index 1
+                low_features = []
+                for layer_idx in self.low_layers:
+                    low_features.append(all_hidden_states[layer_idx][:, 0, :])  # CLS token
+                low_features = torch.cat(low_features, dim=-1)  # [batch, hidden*num_low]
+
+                mid_features = []
+                for layer_idx in self.mid_layers:
+                    mid_features.append(all_hidden_states[layer_idx][:, 0, :])
+                mid_features = torch.cat(mid_features, dim=-1)
+
+                high_features = []
+                for layer_idx in self.high_layers:
+                    high_features.append(all_hidden_states[layer_idx][:, 0, :])
+                high_features = torch.cat(high_features, dim=-1)
+
+                # Hierarchical fusion
+                low_fused = self.low_fusion(low_features)   # [batch, hidden]
+                mid_fused = self.mid_fusion(mid_features)   # [batch, hidden]
+                high_fused = self.high_fusion(high_features) # [batch, hidden]
+
+                # Concatenate all levels
+                hierarchical_repr = torch.cat([low_fused, mid_fused, high_fused], dim=-1)  # [batch, hidden*3]
+
+                # Classification
+                logit = self.classifier(hierarchical_repr)  # [batch, num_classes]
+                logits_list.append(logit)
+            else:
+                logits_list.append(
+                    torch.zeros(batch_size, self.num_classes, device=text_input_ids.device)
+                )
+
+        logits = torch.stack(logits_list, dim=1)  # [batch, max_aspects, num_classes]
+
+        return logits, None  # None for gate_stats
+
+
 def create_baseline(
     baseline_type: str,
     bert_model_name: str = 'distilbert-base-uncased',
@@ -368,7 +556,7 @@ def create_baseline(
     創建 baseline 模型
 
     參數:
-        baseline_type: 'bert_only', 'bert_aaha', 'bert_mean'
+        baseline_type: 'bert_only', 'bert_aaha', 'bert_mean', 'bert_hierarchical'
         其他參數與模型一致
 
     返回:
@@ -399,9 +587,18 @@ def create_baseline(
             dropout=dropout
         )
 
+    elif baseline_type == 'bert_hierarchical':
+        return Baseline_HierarchicalBERT(
+            bert_model_name=bert_model_name,
+            freeze_bert=freeze_bert,
+            hidden_dim=hidden_dim,
+            num_classes=num_classes,
+            dropout=dropout
+        )
+
     else:
         raise ValueError(f"Unknown baseline type: {baseline_type}. "
-                        f"Choose from: 'bert_only', 'bert_aaha', 'bert_mean'")
+                        f"Choose from: 'bert_only', 'bert_aaha', 'bert_mean', 'bert_hierarchical'")
 
 
 def run_all_baselines():
