@@ -144,9 +144,11 @@ def extract_metrics(results, exp_path=None):
 def get_model_name(exp_info, metrics):
     """生成易讀的模型名稱"""
     baseline = metrics['baseline']
+    improved = metrics.get('improved', None)
     use_pmac = metrics['use_pmac']
     use_iarm = metrics['use_iarm']
 
+    # Baseline 模型
     if baseline == 'bert_only':
         return 'BERT Only'
     elif baseline == 'bert_aaha':
@@ -155,6 +157,12 @@ def get_model_name(exp_info, metrics):
         return 'BERT + Mean'
     elif baseline == 'bert_hierarchical':
         return 'Hierarchical BERT'
+
+    # Improved 模型
+    elif improved == 'hierarchical_layerattn':
+        return 'Hierarchical BERT + LayerAttn'
+
+    # Full 模型
     elif use_pmac and use_iarm:
         return 'Full (PMAC + IARM)'
     elif use_pmac:

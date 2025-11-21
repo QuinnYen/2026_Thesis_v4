@@ -41,6 +41,9 @@ def config_to_args(config):
         if model_cfg.get('baseline'):
             args.extend(['--baseline', model_cfg['baseline']])
 
+        if model_cfg.get('improved'):
+            args.extend(['--improved', model_cfg['improved']])
+
         if model_cfg.get('bert_model'):
             args.extend(['--bert_model', model_cfg['bert_model']])
 

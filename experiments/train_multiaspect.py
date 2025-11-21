@@ -30,17 +30,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data.semeval_multiaspect import load_multiaspect_data
 from data.mams_multiaspect import load_mams_data
-from data.augmented_dataset import load_augmented_data
 from data.multiaspect_dataset import create_multiaspect_dataloaders
 from models.bert_embedding import BERTForABSA
-from models.aaha_enhanced import AAHAEnhanced
-from models.pmac_selective import SelectivePMACMultiAspect
-from models.iarm_enhanced import IARMMultiAspect
-from models.base_model import BaseModel, MLP
+from models.base_model import BaseModel
 from utils.focal_loss import get_loss_function
 
 # Import baseline models
 from experiments.baselines import create_baseline
+
+# Import improved models
+from experiments.improved_models import create_improved_model
 
 
 class HMACNetMultiAspect(BaseModel):
@@ -585,6 +584,11 @@ def train_multiaspect_model(args):
         exp_name = f"baseline_{args.baseline}"
         exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
         exp_name += f"_{args.loss_type}"
+    elif args.improved:
+        # Improved 實驗
+        exp_name = f"improved_{args.improved}"
+        exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
+        exp_name += f"_{args.loss_type}"
     else:
         # Full Model 實驗
         exp_name = f"{'pmac' if args.use_pmac else 'nopmac'}_{'iarm' if args.use_iarm else 'noiarm'}"
@@ -592,9 +596,13 @@ def train_multiaspect_model(args):
         exp_name += f"_{args.loss_type}"
 
     # 時間戳實驗資料夾
-    # Baseline 實驗保存在 results/baseline/{dataset}/ 下，其他實驗保存在 results/experiments/ 下
+    # Baseline 實驗保存在 results/baseline/{dataset}/ 下
+    # Improved 實驗保存在 results/improved/{dataset}/ 下
+    # Full Model 實驗保存在 results/experiments/ 下
     if args.baseline:
         exp_dir = project_root / 'results' / 'baseline' / args.dataset / f"{timestamp}_{exp_name}"
+    elif args.improved:
+        exp_dir = project_root / 'results' / 'improved' / args.dataset / f"{timestamp}_{exp_name}"
     else:
         exp_dir = project_root / 'results' / 'experiments' / f"{timestamp}_{exp_name}"
 
@@ -657,29 +665,26 @@ def train_multiaspect_model(args):
         )
     else:
         # SemEval 數據集處理
-        # 檢查是否使用增強數據
+        # 數據增強功能已移除（模組已封存）
         use_augmented = getattr(args, 'use_augmented', False)
 
         if use_augmented:
-            print("使用增強數據集 (EDA Augmentation)")
-            # 如果未指定 augmented_dir，使用默認值
-            augmented_dir = args.augmented_dir if args.augmented_dir else default_aug_dir
-            print(f"增強數據目錄: {augmented_dir}")
-            train_all_samples, test_samples = load_augmented_data(augmented_dir)
-        else:
-            print("使用原始數據集")
-            # 數據路徑
-            train_path = project_root / 'data' / 'raw' / 'semeval2014' / train_xml
-            test_path = project_root / 'data' / 'raw' / 'semeval2014' / test_xml
+            print("⚠️  警告: 數據增強功能已被移除（augmented_dataset 已封存）")
+            print("   將使用原始數據集繼續訓練...")
 
-            train_all_samples, test_samples = load_multiaspect_data(
-                train_path=str(train_path),
-                test_path=str(test_path),
-                min_aspects=args.min_aspects,
-                max_aspects=args.max_aspects,
-                include_single_aspect=args.include_single_aspect,
-                virtual_aspect_mode=args.virtual_aspect_mode
-            )
+        print("使用原始數據集")
+        # 數據路徑
+        train_path = project_root / 'data' / 'raw' / 'semeval2014' / train_xml
+        test_path = project_root / 'data' / 'raw' / 'semeval2014' / test_xml
+
+        train_all_samples, test_samples = load_multiaspect_data(
+            train_path=str(train_path),
+            test_path=str(test_path),
+            min_aspects=args.min_aspects,
+            max_aspects=args.max_aspects,
+            include_single_aspect=args.include_single_aspect,
+            virtual_aspect_mode=args.virtual_aspect_mode
+        )
 
         # 分割驗證集 (SemEval only)
         val_size = int(0.1 * len(train_all_samples))
@@ -711,7 +716,7 @@ def train_multiaspect_model(args):
     # 創建模型
     print("\n" + "="*80)
 
-    # 根據 baseline 參數選擇模型
+    # 根據參數選擇模型
     if args.baseline:
         print(f"創建 Baseline 模型: {args.baseline}")
         print("="*80)
@@ -726,6 +731,23 @@ def train_multiaspect_model(args):
 
         print(f"\n模型配置:")
         print(f"  模型類型: Baseline - {args.baseline}")
+        print(f"  BERT: {args.bert_model}")
+        print(f"  Dropout: {args.dropout}")
+
+    elif args.improved:
+        print(f"創建 Improved 模型: {args.improved}")
+        print("="*80)
+        model = create_improved_model(
+            model_type=args.improved,
+            bert_model_name=args.bert_model,
+            freeze_bert=args.freeze_bert,
+            hidden_dim=args.hidden_dim,
+            num_classes=3,
+            dropout=args.dropout
+        ).to(device)
+
+        print(f"\n模型配置:")
+        print(f"  模型類型: Improved - {args.improved}")
         print(f"  BERT: {args.bert_model}")
         print(f"  Dropout: {args.dropout}")
 
@@ -1073,9 +1095,13 @@ def main():
 
     # 模型類型選擇
     parser.add_argument('--baseline', type=str, default=None,
-                        choices=['bert_only', 'bert_aaha', 'bert_mean', 'bert_hierarchical'],
-                        help='使用 baseline 模型 (bert_only, bert_aaha, bert_mean, bert_hierarchical)。'
-                             '如果不指定，則使用完整的 HMAC-Net')
+                        choices=['bert_cls', 'bert_only'],  # bert_only 為向後兼容
+                        help='使用 baseline 模型 (bert_cls: 標準BERT-CLS baseline)')
+    parser.add_argument('--improved', type=str, default=None,
+                        choices=['hierarchical', 'hierarchical_layerattn'],
+                        help='使用改進模型:\n'
+                             '  - hierarchical: Hierarchical BERT (固定拼接)\n'
+                             '  - hierarchical_layerattn: HBL (Layer-wise Attention)')
 
     # 模型參數
     parser.add_argument('--bert_model', type=str, default='distilbert-base-uncased',

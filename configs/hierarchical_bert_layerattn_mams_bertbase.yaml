@@ -1,0 +1,46 @@
+# Hierarchical BERT + Layer-wise Attention for MAMS (BERT-base)
+# 驗證方法在更大模型上的有效性
+
+experiment_name: "hierarchical_bert_layerattn_mams_bertbase"
+
+# 模型配置
+model:
+  improved: "hierarchical_layerattn"  # Improved 模型：Layer-wise Attention
+  bert_model: "bert-base-uncased"  # ⭐ 改為 BERT-base
+  freeze_bert: false
+  hidden_dim: 768
+  dropout: 0.45
+
+# 數據配置
+data:
+  use_augmented: false
+  min_aspects: 2
+  max_aspects: 8
+  include_single_aspect: false
+  virtual_aspect_mode: "none"
+  max_text_len: 128
+  max_aspect_len: 10
+
+# 訓練配置
+training:
+  batch_size: 32  # 如果記憶體不足，降至 16
+  accumulation_steps: 1
+  epochs: 30
+  lr: 2.0e-5
+  weight_decay: 0.05
+  grad_clip: 1.0
+  patience: 8
+  seed: 42
+
+  # 調度器
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 損失函數
+  loss_type: "focal"
+  focal_gamma: 2.0
+  label_smoothing: 0.05
+  class_weights: [1.0, 5.0, 1.0]
+
+  # Virtual aspect
+  virtual_weight: 0.5

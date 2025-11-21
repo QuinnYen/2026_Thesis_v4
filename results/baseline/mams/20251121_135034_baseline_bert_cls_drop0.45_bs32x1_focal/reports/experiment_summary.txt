@@ -1,0 +1,32 @@
+================================================================================
+實驗摘要 - 20251121_135034
+================================================================================
+
+實驗配置:
+  實驗名稱: baseline_bert_cls_drop0.45_bs32x1_focal
+  模型類型: Baseline - bert_cls
+  Dropout: 0.45
+  Batch Size: 32 x 1 = 32
+  Loss Type: focal
+  Learning Rate: 2e-05
+  Epochs: 30
+
+訓練結果:
+  Best Epoch: 24
+  Best Val F1: 0.8227
+  Test Accuracy: 0.8272
+  Test F1 (Macro): 0.8217
+  Test Precision: 0.8221
+  Test Recall: 0.8214
+
+Per-Class Test F1:
+  Negative: 0.8061
+  Neutral:  0.8510
+  Positive: 0.8081
+
+文件路徑:
+  實驗資料夾: D:\Quinn_SmallHouse\2026_Thesis_v4\results\baseline\mams\20251121_135034_baseline_bert_cls_drop0.45_bs32x1_focal
+  最佳模型: D:\Quinn_SmallHouse\2026_Thesis_v4\results\baseline\mams\20251121_135034_baseline_bert_cls_drop0.45_bs32x1_focal\checkpoints\best_model_epoch24_f1_0.8227.pt
+  結果JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\baseline\mams\20251121_135034_baseline_bert_cls_drop0.45_bs32x1_focal\reports\experiment_results.json
+  配置JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\baseline\mams\20251121_135034_baseline_bert_cls_drop0.45_bs32x1_focal\reports\experiment_config.json
+  可視化: D:\Quinn_SmallHouse\2026_Thesis_v4\results\baseline\mams\20251121_135034_baseline_bert_cls_drop0.45_bs32x1_focal\visualizations

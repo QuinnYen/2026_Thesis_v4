@@ -1,6 +1,19 @@
 /.claude
 /.venv
 /data
+
+/configs/archived/
+/data/archived/
+/models/archived/
+/utils/archived/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Results
 /results/experiments/**/checkpoints/
-/results/baseline
-/results/baseline_comparison/
+/results/baseline/**/checkpoints/
+/results/improved/**/checkpoints/

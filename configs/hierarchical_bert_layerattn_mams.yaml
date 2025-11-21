@@ -1,0 +1,48 @@
+# Hierarchical BERT + Layer-wise Attention for MAMS
+# 基於 Kondratyuk & Straka (EMNLP 2019) 的 Layer-wise Attention 機制
+#
+# MAMS 專用配置 (微調版本)
+
+experiment_name: "hierarchical_bert_layerattn_mams"
+
+# 模型配置
+model:
+  improved: "hierarchical_layerattn"  # Improved 模型：Layer-wise Attention
+  bert_model: "distilbert-base-uncased"
+  freeze_bert: false
+  hidden_dim: 768
+  dropout: 0.5  # 提高 dropout 防止過擬合 (0.45 → 0.5)
+
+# 數據配置
+data:
+  use_augmented: false
+  min_aspects: 2
+  max_aspects: 8
+  include_single_aspect: false  # MAMS 100% 多方面
+  virtual_aspect_mode: "none"
+  max_text_len: 128
+  max_aspect_len: 10
+
+# 訓練配置
+training:
+  batch_size: 32
+  accumulation_steps: 1
+  epochs: 30
+  lr: 2.0e-5
+  weight_decay: 0.1  # 提高 weight decay (0.05 → 0.1)
+  grad_clip: 1.0
+  patience: 12  # 增加 patience，與 Method 1 一致 (8 → 12)
+  seed: 42
+
+  # 調度器
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 損失函數 - 與 Method 1 保持一致
+  loss_type: "focal"
+  focal_gamma: 2.5  # 與 Method 1 一致 (2.0 → 2.5)
+  label_smoothing: 0.1  # 提高 label smoothing (0.05 → 0.1)
+  class_weights: [1.0, 8.0, 1.0]  # 與 Method 1 一致
+
+  # Virtual aspect
+  virtual_weight: 0.5
