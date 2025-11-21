@@ -457,6 +457,7 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     total_loss = 0.0
     num_batches = 0
     all_gates = []  # 收集所有gate值
+    layer_attention_weights = None  # 收集 HBL 的 layer attention 權重
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating", ascii=True):
@@ -469,11 +470,17 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
             is_virtual = batch['is_virtual'].to(device)
 
             # Forward
-            logits, gate_stats = model(text_ids, text_mask, aspect_ids, aspect_mask_input, aspect_mask)
+            logits, extras = model(text_ids, text_mask, aspect_ids, aspect_mask_input, aspect_mask)
 
-            # 收集gate統計
-            if collect_gates and gate_stats is not None:
-                all_gates.extend(gate_stats.cpu().numpy().flatten().tolist())
+            # 收集 gate 統計（PMAC 模組）或 layer attention（HBL 模組）
+            if extras is not None:
+                if isinstance(extras, dict) and 'layer_attention' in extras:
+                    # HBL 模型：收集 layer attention 權重
+                    if layer_attention_weights is None:
+                        layer_attention_weights = extras['layer_attention']
+                elif collect_gates:
+                    # PMAC 模型：收集 gate 值
+                    all_gates.extend(extras.cpu().numpy().flatten().tolist())
 
             # 計算 loss（與訓練時使用相同的 loss 函數）
             if loss_fn is not None and args is not None:
@@ -565,6 +572,10 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
 
     if gate_analysis is not None:
         result['gate_stats'] = gate_analysis
+
+    # 加入 layer attention 權重（HBL 特有）
+    if layer_attention_weights is not None:
+        result['layer_attention'] = layer_attention_weights.tolist()
 
     return result
 
@@ -857,7 +868,7 @@ def train_multiaspect_model(args):
             is_virtual = batch['is_virtual'].to(device)
 
             # Forward
-            logits, gate_stats = model(text_ids, text_mask, aspect_ids, aspect_mask_input, aspect_mask)
+            logits, extras = model(text_ids, text_mask, aspect_ids, aspect_mask_input, aspect_mask)
 
             # Loss
             if args.loss_type != 'ce':
@@ -988,6 +999,15 @@ def train_multiaspect_model(args):
         print(f"  Sparsity (< 0.1): {gate_stats['sparsity']*100:.1f}%")
         print(f"  Activation Rate (> 0.5): {gate_stats['activation_rate']*100:.1f}%")
 
+    # 輸出 HBL layer attention 權重
+    if 'layer_attention' in test_metrics:
+        layer_weights = test_metrics['layer_attention']
+        print(f"\nHBL Layer-wise Attention Weights:")
+        print(f"  Low-level:  {layer_weights[0]:.4f}")
+        print(f"  Mid-level:  {layer_weights[1]:.4f}")
+        print(f"  High-level: {layer_weights[2]:.4f}")
+        print(f"  註解: 權重經過 softmax 歸一化，總和為 1.0")
+
     # 保存結果
     results = {
         'args': vars(args),
@@ -996,6 +1016,10 @@ def train_multiaspect_model(args):
         'test_metrics': {k: float(v) if isinstance(v, (float, np.float32, np.float64)) else v
                         for k, v in test_metrics.items()}
     }
+
+    # 單獨保存 layer_attention 到頂層，方便報告生成器讀取
+    if 'layer_attention' in test_metrics:
+        results['layer_attention'] = test_metrics['layer_attention']
 
     # 保存結果到時間戳資料夾
     results_path = reports_dir / 'experiment_results.json'
@@ -1098,10 +1122,11 @@ def main():
                         choices=['bert_cls', 'bert_only'],  # bert_only 為向後兼容
                         help='使用 baseline 模型 (bert_cls: 標準BERT-CLS baseline)')
     parser.add_argument('--improved', type=str, default=None,
-                        choices=['hierarchical', 'hierarchical_layerattn'],
+                        choices=['hierarchical', 'hierarchical_layerattn', 'iarn'],
                         help='使用改進模型:\n'
                              '  - hierarchical: Hierarchical BERT (固定拼接)\n'
-                             '  - hierarchical_layerattn: HBL (Layer-wise Attention)')
+                             '  - hierarchical_layerattn: HBL (Layer-wise Attention)\n'
+                             '  - iarn: Inter-Aspect Relation Network (Aspect交互建模)')
 
     # 模型參數
     parser.add_argument('--bert_model', type=str, default='distilbert-base-uncased',

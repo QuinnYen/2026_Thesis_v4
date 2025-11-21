@@ -6,7 +6,8 @@
 模型架構:
 - Baseline: BERT-CLS (使用 [CLS] token)
 - Method 1: Hierarchical BERT (階層式特徵提取，固定拼接)
-- Method 2: HBL (Hierarchical BERT + Layer-wise Attention)
+- Method 2: HBL (Hierarchical BERT + Layer-wise Attention) [已放棄]
+- Method 3: IARN (Inter-Aspect Relation Network) [主要貢獻]
 
 使用方法:
     python experiments/generate_comprehensive_report.py --dataset restaurants
@@ -58,6 +59,8 @@ def find_all_experiments(results_dir, dataset):
             dir_name = exp_dir.name
             if '_improved_hierarchical_layerattn_' in dir_name:
                 exp_type = 'hierarchical_layerattn'
+            elif '_improved_iarn_' in dir_name:
+                exp_type = 'iarn'
             elif '_improved_hierarchical_' in dir_name:
                 exp_type = 'hierarchical'
             else:
@@ -161,6 +164,11 @@ def generate_text_report(dataset, results):
     report.append("             基於 UDify (Kondratyuk & Straka, EMNLP 2019)")
     report.append("             動態學習層級權重，替代固定拼接")
     report.append("")
+    report.append("  Method 3:  IARN (Inter-Aspect Relation Network)")
+    report.append("             顯式建模多個 aspects 之間的交互關係")
+    report.append("             Aspect-to-Aspect Attention + Relation-aware Gating")
+    report.append("             與 HPNet (2021) 差異化創新")
+    report.append("")
 
     # 實驗配置
     report.append("-" * 100)
@@ -216,12 +224,12 @@ def generate_text_report(dataset, results):
         report.append("-" * 100)
 
         if baseline_result:
-            report.append(f"\n✓ Baseline (BERT-CLS):")
+            report.append(f"\n[Baseline] BERT-CLS:")
             report.append(f"  Test Accuracy: {baseline_result['test_acc']:.4f}")
             report.append(f"  Test F1:       {baseline_result['test_f1']:.4f}")
             report.append(f"  Best Epoch:    {baseline_result['best_epoch']}")
 
-        report.append(f"\n✓ 最佳模型: {best_f1['description']}")
+        report.append(f"\n[Best Model] {best_f1['description']}")
         report.append(f"  Test F1:       {best_f1['test_f1']:.4f}")
         report.append(f"  Test Accuracy: {best_f1['test_acc']:.4f}")
         report.append(f"  Best Epoch:    {best_f1['best_epoch']}")
@@ -230,14 +238,14 @@ def generate_text_report(dataset, results):
         if baseline_result and best_f1['test_f1'] and baseline_result['test_f1']:
             improvement = best_f1['test_f1'] - baseline_result['test_f1']
             improvement_pct = (improvement / baseline_result['test_f1']) * 100
-            report.append(f"\n✓ 相對 Baseline 改進:")
+            report.append(f"\n[Improvement] 相對 Baseline 改進:")
             report.append(f"  F1 提升:       +{improvement:.4f} ({improvement_pct:+.2f}%)")
 
         # HBL 的 Layer Attention 權重
         hbl_result = next((r for r in valid_results if r['model_type'] == 'hierarchical_layerattn'), None)
         if hbl_result and hbl_result.get('layer_attention'):
             weights = hbl_result['layer_attention']
-            report.append(f"\n✓ HBL 學習到的層級權重:")
+            report.append(f"\n[HBL Weights] 學習到的層級權重:")
             report.append(f"  Low-level:     {weights[0]:.4f}")
             report.append(f"  Mid-level:     {weights[1]:.4f}")
             report.append(f"  High-level:    {weights[2]:.4f}")
@@ -300,6 +308,7 @@ def main():
         'improved': {
             'hierarchical': "Method 1 (Hierarchical)",
             'hierarchical_layerattn': "Method 2 (HBL)",
+            'iarn': "Method 3 (IARN)",
         }
     }
 

@@ -2,6 +2,8 @@
 /.venv
 /data
 
+/docs/archived/
+/experiments/archived/
 /configs/archived/
 /data/archived/
 /models/archived/
