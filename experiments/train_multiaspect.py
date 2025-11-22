@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data.semeval_multiaspect import load_multiaspect_data
 from data.mams_multiaspect import load_mams_data
+from data.memd_multiaspect import load_memd_data
 from data.multiaspect_dataset import create_multiaspect_dataloaders
 from models.bert_embedding import BERTForABSA
 from models.base_model import BaseModel
@@ -650,6 +651,10 @@ def train_multiaspect_model(args):
         val_xml = 'val.xml'
         test_xml = 'test.xml'
         default_aug_dir = None  # MAMS 暫不支持數據增強
+    elif args.dataset.startswith('memd_'):
+        # MEMD-ABSA 數據集 (Books, Clothing, Hotel, Laptop, Restaurant)
+        memd_domain = args.dataset.replace('memd_', '').capitalize()
+        default_aug_dir = None  # MEMD 暫不支持數據增強
     else:
         raise ValueError(f"不支援的數據集: {args.dataset}")
 
@@ -669,6 +674,22 @@ def train_multiaspect_model(args):
             train_path=str(train_path),
             val_path=str(val_path),
             test_path=str(test_path),
+            min_aspects=args.min_aspects,
+            max_aspects=args.max_aspects,
+            include_single_aspect=args.include_single_aspect,
+            virtual_aspect_mode=args.virtual_aspect_mode
+        )
+    elif args.dataset.startswith('memd_'):
+        # MEMD-ABSA 數據集
+        print(f"使用 MEMD-ABSA 數據集 - {memd_domain} 領域")
+        print("注意: MEMD 為多領域數據集，自動分割 10% 作為驗證集")
+
+        # MEMD 數據路徑
+        memd_dir = project_root / 'data' / 'raw' / 'MEMD-ABSA'
+
+        train_samples, val_samples, test_samples = load_memd_data(
+            domain=memd_domain,
+            data_dir=str(memd_dir),
             min_aspects=args.min_aspects,
             max_aspects=args.max_aspects,
             include_single_aspect=args.include_single_aspect,
@@ -1095,8 +1116,10 @@ def main():
 
     # 數據參數
     parser.add_argument('--dataset', type=str, required=True,
-                        choices=['restaurants', 'laptops', 'mams'],
-                        help='數據集選擇 (restaurants, laptops, 或 mams)')
+                        choices=['restaurants', 'laptops', 'mams',
+                                 'memd_books', 'memd_clothing', 'memd_hotel',
+                                 'memd_laptop', 'memd_restaurant'],
+                        help='數據集選擇 (restaurants, laptops, mams, 或 memd_* 系列)')
     parser.add_argument('--use_augmented', action='store_true', default=False,
                         help='使用增強數據集 (EDA Augmentation)')
     parser.add_argument('--augmented_dir', type=str, default=None,

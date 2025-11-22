@@ -1,0 +1,34 @@
+================================================================================
+實驗摘要 - 20251121_215520
+================================================================================
+
+實驗配置:
+  實驗名稱: improved_iarn_drop0.3_bs32x1_focal
+  模型類型: Full HMAC-Net
+  PMAC: Disabled
+  IARM: Disabled
+  Dropout: 0.3
+  Batch Size: 32 x 1 = 32
+  Loss Type: focal
+  Learning Rate: 2e-05
+  Epochs: 30
+
+訓練結果:
+  Best Epoch: 25
+  Best Val F1: 0.7170
+  Test Accuracy: 0.7992
+  Test F1 (Macro): 0.7090
+  Test Precision: 0.7290
+  Test Recall: 0.6957
+
+Per-Class Test F1:
+  Negative: 0.7302
+  Neutral:  0.5088
+  Positive: 0.8882
+
+文件路徑:
+  實驗資料夾: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251121_215520_improved_iarn_drop0.3_bs32x1_focal
+  最佳模型: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251121_215520_improved_iarn_drop0.3_bs32x1_focal\checkpoints\best_model_epoch25_f1_0.7170.pt
+  結果JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251121_215520_improved_iarn_drop0.3_bs32x1_focal\reports\experiment_results.json
+  配置JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251121_215520_improved_iarn_drop0.3_bs32x1_focal\reports\experiment_config.json
+  可視化: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251121_215520_improved_iarn_drop0.3_bs32x1_focal\visualizations

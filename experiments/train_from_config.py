@@ -176,8 +176,10 @@ def main():
     parser.add_argument('--config', type=str, required=True,
                         help='YAML 配置文件路徑')
     parser.add_argument('--dataset', type=str, required=True,
-                        choices=['restaurants', 'laptops', 'mams'],
-                        help='數據集選擇 (restaurants, laptops, 或 mams)')
+                        choices=['restaurants', 'laptops', 'mams',
+                                 'memd_books', 'memd_clothing', 'memd_hotel',
+                                 'memd_laptop', 'memd_restaurant'],
+                        help='數據集選擇 (restaurants, laptops, mams, 或 memd_* 系列)')
     parser.add_argument('--override', nargs='*', default=[],
                         help='覆蓋配置的額外參數，例如: --override --epochs 50 --lr 3e-5')
 

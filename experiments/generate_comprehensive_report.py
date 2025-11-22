@@ -203,9 +203,9 @@ def generate_text_report(dataset, results):
         acc = f"{r['test_acc']:.4f}" if r['test_acc'] else "N/A"
         f1 = f"{r['test_f1']:.4f}" if r['test_f1'] else "N/A"
         val_f1 = f"{r['val_f1']:.4f}" if r['val_f1'] else "N/A"
-        f1_neg = f"{r['test_f1_neg']:.4f}" if r['test_f1_neg'] else "N/A"
-        f1_neu = f"{r['test_f1_neu']:.4f}" if r['test_f1_neu'] else "N/A"
-        f1_pos = f"{r['test_f1_pos']:.4f}" if r['test_f1_pos'] else "N/A"
+        f1_neg = f"{r['test_f1_neg']:.4f}" if r.get('test_f1_neg') else "N/A"
+        f1_neu = f"{r['test_f1_neu']:.4f}" if r.get('test_f1_neu') else "N/A"
+        f1_pos = f"{r['test_f1_pos']:.4f}" if r.get('test_f1_pos') else "N/A"
         epoch = f"{r['best_epoch']}" if r['best_epoch'] else "N/A"
 
         report.append(f"{model:<25} {acc:>10} {f1:>10} {val_f1:>10} "
