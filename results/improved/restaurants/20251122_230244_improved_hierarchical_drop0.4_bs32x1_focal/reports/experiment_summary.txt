@@ -1,0 +1,32 @@
+================================================================================
+實驗摘要 - 20251122_230244
+================================================================================
+
+實驗配置:
+  實驗名稱: improved_hierarchical_drop0.4_bs32x1_focal
+  模型類型: Improved - hierarchical
+  Dropout: 0.4
+  Batch Size: 32 x 1 = 32
+  Loss Type: focal
+  Learning Rate: 2e-05
+  Epochs: 25
+
+訓練結果:
+  Best Epoch: 12
+  Best Val F1: 0.7099
+  Test Accuracy: 0.8210
+  Test F1 (Macro): 0.7505
+  Test Precision: 0.7585
+  Test Recall: 0.7433
+
+Per-Class Test F1:
+  Negative: 0.7802
+  Neutral:  0.5714
+  Positive: 0.8998
+
+文件路徑:
+  實驗資料夾: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251122_230244_improved_hierarchical_drop0.4_bs32x1_focal
+  最佳模型: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251122_230244_improved_hierarchical_drop0.4_bs32x1_focal\checkpoints\best_model_epoch12_f1_0.7099.pt
+  結果JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251122_230244_improved_hierarchical_drop0.4_bs32x1_focal\reports\experiment_results.json
+  配置JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251122_230244_improved_hierarchical_drop0.4_bs32x1_focal\reports\experiment_config.json
+  可視化: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251122_230244_improved_hierarchical_drop0.4_bs32x1_focal\visualizations

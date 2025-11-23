@@ -1,0 +1,32 @@
+================================================================================
+實驗摘要 - 20251123_045057
+================================================================================
+
+實驗配置:
+  實驗名稱: improved_iarn_drop0.3_bs32x1_focal
+  模型類型: Improved - iarn
+  Dropout: 0.3
+  Batch Size: 32 x 1 = 32
+  Loss Type: focal
+  Learning Rate: 2e-05
+  Epochs: 25
+
+訓練結果:
+  Best Epoch: 11
+  Best Val F1: 0.7013
+  Test Accuracy: 0.7359
+  Test F1 (Macro): 0.6800
+  Test Precision: 0.6965
+  Test Recall: 0.6894
+
+Per-Class Test F1:
+  Negative: 0.7051
+  Neutral:  0.4887
+  Positive: 0.8464
+
+文件路徑:
+  實驗資料夾: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\laptops\20251123_045057_improved_iarn_drop0.3_bs32x1_focal
+  最佳模型: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\laptops\20251123_045057_improved_iarn_drop0.3_bs32x1_focal\checkpoints\best_model_epoch11_f1_0.7013.pt
+  結果JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\laptops\20251123_045057_improved_iarn_drop0.3_bs32x1_focal\reports\experiment_results.json
+  配置JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\laptops\20251123_045057_improved_iarn_drop0.3_bs32x1_focal\reports\experiment_config.json
+  可視化: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\laptops\20251123_045057_improved_iarn_drop0.3_bs32x1_focal\visualizations

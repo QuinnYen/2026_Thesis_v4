@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.amp import autocast, GradScaler
 from transformers import AutoTokenizer
 import argparse
 from pathlib import Path
@@ -35,6 +36,8 @@ from data.multiaspect_dataset import create_multiaspect_dataloaders
 from models.bert_embedding import BERTForABSA
 from models.base_model import BaseModel
 from utils.focal_loss import get_loss_function
+from utils.dataset_analyzer import analyze_dataset, print_dataset_stats
+from utils.model_selector import select_model, get_model_config, print_selection_result
 
 # Import baseline models
 from experiments.baselines import create_baseline
@@ -43,262 +46,178 @@ from experiments.baselines import create_baseline
 from experiments.improved_models import create_improved_model
 
 
-class HMACNetMultiAspect(BaseModel):
-    """
-    Multi-Aspect HMAC-Net
-
-    支持句子級別的多面向建模
-    """
-
-    def __init__(
-        self,
-        bert_model_name: str = 'distilbert-base-uncased',
-        freeze_bert: bool = False,
-        hidden_dim: int = 768,  # 保持 BERT 維度，不降維
-        num_classes: int = 3,
-        dropout: float = 0.1,
-        # PMAC 參數
-        use_pmac: bool = True,
-        gate_bias_init: float = -3.0,  # Selective PMAC gate 初始化偏置
-        gate_weight_gain: float = 0.1,  # Selective PMAC gate 權重增益
-        # IARM 參數 (Transformer-based)
-        use_iarm: bool = True,
-        iarm_num_heads: int = 4,
-        iarm_num_layers: int = 2
-    ):
-        super(HMACNetMultiAspect, self).__init__()
-
-        self.use_pmac = use_pmac
-        self.use_iarm = use_iarm
-        self.hidden_dim = hidden_dim
-
-        # BERT 嵌入
-        self.bert_absa = BERTForABSA(
-            model_name=bert_model_name,
-            freeze_bert=freeze_bert
-        )
-
-        bert_hidden_size = self.bert_absa.hidden_size
-
-        # 投影層（如果需要）
-        if bert_hidden_size != hidden_dim:
-            self.text_projection = nn.Linear(bert_hidden_size, hidden_dim)
-            self.aspect_projection = nn.Linear(bert_hidden_size, hidden_dim)
-        else:
-            self.text_projection = nn.Identity()
-            self.aspect_projection = nn.Identity()
-
-        # AAHA 模組（為每個 aspect 提取上下文）
-        self.aaha = AAHAEnhanced(
-            hidden_dim=hidden_dim,
-            aspect_dim=hidden_dim,
-            word_attention_dims=[hidden_dim // 2],
-            phrase_attention_dims=[hidden_dim // 2],
-            sentence_attention_dims=[hidden_dim],
-            attention_dropout=0.0,
-            output_dropout=dropout
-        )
-
-        # PMAC Multi-Aspect（Selective PMAC - 本論文核心創新）
-        if use_pmac:
-            self.pmac = SelectivePMACMultiAspect(
-                input_dim=hidden_dim,
-                fusion_dim=hidden_dim,
-                num_composition_layers=2,
-                hidden_dim=256,
-                dropout=dropout,
-                use_layer_norm=True,
-                gate_bias_init=gate_bias_init,
-                gate_weight_gain=gate_weight_gain
-            )
-
-        # IARM Multi-Aspect（Transformer-based 關係建模）
-        if use_iarm:
-            self.iarm = IARMMultiAspect(
-                input_dim=hidden_dim,
-                relation_dim=hidden_dim,
-                num_heads=iarm_num_heads,
-                num_layers=iarm_num_layers,
-                dropout=dropout
-            )
-
-        # 分類器（為每個 aspect 獨立分類）
-        self.classifier = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_classes)
-        )
-
-    def forward(
-        self,
-        text_input_ids: torch.Tensor,
-        text_attention_mask: torch.Tensor,
-        aspect_input_ids: torch.Tensor,
-        aspect_attention_mask: torch.Tensor,
-        aspect_mask: torch.Tensor
-    ):
-        """
-        前向傳播
-
-        參數:
-            text_input_ids: [batch, seq_len]
-            text_attention_mask: [batch, seq_len]
-            aspect_input_ids: [batch, max_aspects, aspect_len]
-            aspect_attention_mask: [batch, max_aspects, aspect_len]
-            aspect_mask: [batch, max_aspects] - bool，標記有效 aspects
-
-        返回:
-            logits: [batch, max_aspects, num_classes]
-        """
-        batch_size, max_aspects, aspect_len = aspect_input_ids.shape
-
-        # 1. BERT 編碼文本（一次）
-        text_emb = self.bert_absa.bert_embedding(
-            text_input_ids,
-            attention_mask=text_attention_mask
-        )  # [batch, seq_len, bert_dim]
-
-        text_hidden = self.text_projection(text_emb)  # [batch, seq_len, hidden_dim]
-
-        # 2. BERT 編碼每個 aspect
-        aspect_hidden_list = []
-        for i in range(max_aspects):
-            # 只處理有效的 aspects
-            if aspect_mask[:, i].any():
-                asp_emb = self.bert_absa.bert_embedding(
-                    aspect_input_ids[:, i, :],
-                    attention_mask=aspect_attention_mask[:, i, :]
-                )  # [batch, aspect_len, bert_dim]
-
-                # 使用 [CLS] token
-                asp_repr = asp_emb[:, 0, :]  # [batch, bert_dim]
-                asp_hidden = self.aspect_projection(asp_repr)  # [batch, hidden_dim]
-            else:
-                asp_hidden = torch.zeros(batch_size, self.hidden_dim, device=text_hidden.device)
-
-            aspect_hidden_list.append(asp_hidden)
-
-        aspect_hiddens = torch.stack(aspect_hidden_list, dim=1)  # [batch, max_aspects, hidden_dim]
-
-        # 3. AAHA - 為每個 aspect 提取上下文
-        context_vectors = []
-        for i in range(max_aspects):
-            if aspect_mask[:, i].any():
-                ctx, _ = self.aaha(
-                    text_hidden,
-                    aspect_hiddens[:, i, :],
-                    text_attention_mask.float()
-                )
-                context_vectors.append(ctx)
-            else:
-                context_vectors.append(torch.zeros(batch_size, self.hidden_dim, device=text_hidden.device))
-
-        context_vectors = torch.stack(context_vectors, dim=1)  # [batch, max_aspects, hidden_dim]
-
-        # 4. PMAC - 多面向組合（創新核心！）
-        gate_stats = None
-        if self.use_pmac:
-            composed_features, pmac_outputs = self.pmac(context_vectors, aspect_mask)
-            # 如果是 Selective PMAC，pmac_outputs 就是 gate 值張量
-            if isinstance(self.pmac, SelectivePMACMultiAspect) and pmac_outputs is not None:
-                gate_stats = pmac_outputs
-        else:
-            composed_features = context_vectors
-
-        # 5. IARM - 面向間關係建模（創新核心！）
-        if self.use_iarm:
-            enhanced_features, _ = self.iarm(composed_features, aspect_mask)
-        else:
-            enhanced_features = composed_features
-
-        # 6. 分類
-        logits = self.classifier(enhanced_features)  # [batch, max_aspects, 3]
-
-        return logits, gate_stats
-
-
 def generate_training_visualizations(results, save_dir):
     """
     生成所有訓練曲線圖表
+
+    生成的圖表：
+    1. loss_and_accuracy.png - 損失函數與準確率曲線圖
+    2. learning_curves.png - 學習曲線（F1 Score）
+    3. train_val_comparison.png - Train vs Val 對比圖
+    4. confusion_matrix.png - 混淆矩陣
     """
+    from sklearn.metrics import confusion_matrix
+
     plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'Arial Unicode MS', 'DejaVu Sans']
     plt.rcParams['axes.unicode_minus'] = False
     sns.set_style("whitegrid")
 
     history = results['history']
     epochs = history['epochs']
+    test_metrics = results.get('test_metrics', {})
 
-    print("\n生成圖表...")
+    # 靜默生成圖表
 
-    # 1. 綜合指標圖（2x2）
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle('Training Metrics Overview', fontsize=18, fontweight='bold')
+    # ========== 1. 損失函數與準確率曲線圖 (Loss and Accuracy Curves) ==========
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle('Loss and Accuracy Curves', fontsize=16, fontweight='bold')
 
-    # 訓練損失
-    axes[0, 0].plot(epochs, history['train_loss'], 'b-o', linewidth=2, markersize=5)
-    axes[0, 0].set_xlabel('Epoch', fontsize=12, fontweight='bold')
-    axes[0, 0].set_ylabel('Loss', fontsize=12, fontweight='bold')
-    axes[0, 0].set_title('Training Loss', fontsize=14, fontweight='bold')
-    axes[0, 0].grid(True, alpha=0.3)
+    # 左圖：Loss 曲線
+    axes[0].plot(epochs, history['train_loss'], 'b-o', linewidth=2, markersize=5, label='Train Loss')
+    if 'val_loss' in history and any(history['val_loss']):
+        axes[0].plot(epochs, history['val_loss'], 'r-s', linewidth=2, markersize=5, label='Val Loss')
+    axes[0].set_xlabel('Epoch', fontsize=12, fontweight='bold')
+    axes[0].set_ylabel('Loss', fontsize=12, fontweight='bold')
+    axes[0].set_title('Loss Curve', fontsize=14, fontweight='bold')
+    axes[0].legend(fontsize=10)
+    axes[0].grid(True, alpha=0.3)
 
-    # 驗證準確率
+    # 右圖：Accuracy 曲線
     val_acc = history['val_accuracy']
-    axes[0, 1].plot(epochs, val_acc, 'g-o', linewidth=2, markersize=5)
+    axes[1].plot(epochs, val_acc, 'g-o', linewidth=2, markersize=5, label='Val Accuracy')
     best_epoch = np.argmax(val_acc) + 1
-    axes[0, 1].axvline(x=best_epoch, color='r', linestyle='--', alpha=0.5)
-    axes[0, 1].set_xlabel('Epoch', fontsize=12, fontweight='bold')
-    axes[0, 1].set_ylabel('Accuracy', fontsize=12, fontweight='bold')
-    axes[0, 1].set_title(f'Validation Accuracy (Best: Epoch {best_epoch})', fontsize=14, fontweight='bold')
-    axes[0, 1].grid(True, alpha=0.3)
+    best_acc = max(val_acc)
+    axes[1].axvline(x=best_epoch, color='r', linestyle='--', alpha=0.5, label=f'Best: Epoch {best_epoch}')
+    axes[1].axhline(y=best_acc, color='r', linestyle=':', alpha=0.3)
+    axes[1].scatter([best_epoch], [best_acc], color='r', s=100, zorder=5)
+    axes[1].annotate(f'{best_acc:.4f}', (best_epoch, best_acc), textcoords="offset points",
+                     xytext=(10, 5), fontsize=10, fontweight='bold', color='r')
+    axes[1].set_xlabel('Epoch', fontsize=12, fontweight='bold')
+    axes[1].set_ylabel('Accuracy', fontsize=12, fontweight='bold')
+    axes[1].set_title('Validation Accuracy', fontsize=14, fontweight='bold')
+    axes[1].legend(fontsize=10)
+    axes[1].grid(True, alpha=0.3)
 
-    # 驗證F1
+    plt.tight_layout()
+    save_path = save_dir / 'loss_and_accuracy.png'
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # ========== 2. 學習曲線 (Learning Curves) - F1 Score ==========
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle('Learning Curves (F1 Score)', fontsize=16, fontweight='bold')
+
+    # 左圖：Macro F1
     val_f1 = history['val_f1_macro']
-    axes[1, 0].plot(epochs, val_f1, 'm-o', linewidth=2, markersize=5)
+    axes[0].plot(epochs, val_f1, 'm-o', linewidth=2, markersize=5, label='Val F1 (Macro)')
     best_epoch_f1 = np.argmax(val_f1) + 1
-    axes[1, 0].axvline(x=best_epoch_f1, color='r', linestyle='--', alpha=0.5)
-    axes[1, 0].set_xlabel('Epoch', fontsize=12, fontweight='bold')
-    axes[1, 0].set_ylabel('F1 Score', fontsize=12, fontweight='bold')
-    axes[1, 0].set_title(f'Validation F1 Macro (Best: Epoch {best_epoch_f1})', fontsize=14, fontweight='bold')
-    axes[1, 0].grid(True, alpha=0.3)
+    best_f1 = max(val_f1)
+    axes[0].axvline(x=best_epoch_f1, color='r', linestyle='--', alpha=0.5)
+    axes[0].scatter([best_epoch_f1], [best_f1], color='r', s=100, zorder=5)
+    axes[0].annotate(f'{best_f1:.4f}', (best_epoch_f1, best_f1), textcoords="offset points",
+                     xytext=(10, 5), fontsize=10, fontweight='bold', color='r')
+    axes[0].set_xlabel('Epoch', fontsize=12, fontweight='bold')
+    axes[0].set_ylabel('F1 Score', fontsize=12, fontweight='bold')
+    axes[0].set_title(f'Validation F1 Macro (Best: Epoch {best_epoch_f1})', fontsize=14, fontweight='bold')
+    axes[0].legend(fontsize=10)
+    axes[0].grid(True, alpha=0.3)
 
-    # 每類F1
+    # 右圖：Per-Class F1
     f1_per_class = np.array(history['val_f1_per_class'])
     class_names = ['Negative', 'Neutral', 'Positive']
     colors = ['#e74c3c', '#f39c12', '#27ae60']
     for i, (class_name, color) in enumerate(zip(class_names, colors)):
-        axes[1, 1].plot(epochs, f1_per_class[:, i], marker='o', label=class_name,
-                       color=color, linewidth=2, markersize=5)
-    axes[1, 1].set_xlabel('Epoch', fontsize=12, fontweight='bold')
-    axes[1, 1].set_ylabel('F1 Score', fontsize=12, fontweight='bold')
-    axes[1, 1].set_title('Per-Class F1 Scores', fontsize=14, fontweight='bold')
-    axes[1, 1].legend(fontsize=11, loc='best')
-    axes[1, 1].grid(True, alpha=0.3)
+        axes[1].plot(epochs, f1_per_class[:, i], marker='o', label=class_name,
+                    color=color, linewidth=2, markersize=5)
+    axes[1].set_xlabel('Epoch', fontsize=12, fontweight='bold')
+    axes[1].set_ylabel('F1 Score', fontsize=12, fontweight='bold')
+    axes[1].set_title('Per-Class F1 Scores', fontsize=14, fontweight='bold')
+    axes[1].legend(fontsize=10)
+    axes[1].grid(True, alpha=0.3)
 
     plt.tight_layout()
-    save_path = save_dir / 'comprehensive_training_metrics.png'
+    save_path = save_dir / 'learning_curves.png'
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"  [SAVED] {save_path.name}")
     plt.close()
 
-    # 2. 每類別F1詳細曲線
-    plt.figure(figsize=(12, 7))
-    for i, (class_name, color) in enumerate(zip(class_names, colors)):
-        f1_scores = f1_per_class[:, i]
-        plt.plot(epochs, f1_scores, marker='o', label=f'{class_name} F1',
-                color=color, linewidth=2, markersize=6)
-        final_f1 = f1_scores[-1]
-        plt.text(epochs[-1], final_f1, f' {final_f1:.3f}', fontsize=10,
-                color=color, verticalalignment='center', fontweight='bold')
+    # ========== 3. Train vs Val 對比圖 ==========
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle('Train vs Validation Comparison', fontsize=16, fontweight='bold')
 
-    plt.xlabel('Epoch', fontsize=14, fontweight='bold')
-    plt.ylabel('F1 Score', fontsize=14, fontweight='bold')
-    plt.title('Per-Class F1 Score Curves', fontsize=16, fontweight='bold', pad=20)
-    plt.legend(fontsize=12, loc='best')
-    plt.grid(True, alpha=0.3)
+    # 左圖：Loss 對比
+    axes[0].plot(epochs, history['train_loss'], 'b-o', linewidth=2, markersize=5, label='Train Loss')
+    if 'val_loss' in history and any(history['val_loss']):
+        axes[0].plot(epochs, history['val_loss'], 'r-s', linewidth=2, markersize=5, label='Val Loss')
+    axes[0].fill_between(epochs, history['train_loss'],
+                         history['val_loss'] if 'val_loss' in history and any(history['val_loss']) else history['train_loss'],
+                         alpha=0.2, color='gray', label='Gap')
+    axes[0].set_xlabel('Epoch', fontsize=12, fontweight='bold')
+    axes[0].set_ylabel('Loss', fontsize=12, fontweight='bold')
+    axes[0].set_title('Loss: Train vs Validation', fontsize=14, fontweight='bold')
+    axes[0].legend(fontsize=10)
+    axes[0].grid(True, alpha=0.3)
+
+    # 判斷過擬合/欠擬合
+    if 'val_loss' in history and any(history['val_loss']):
+        final_train_loss = history['train_loss'][-1]
+        final_val_loss = history['val_loss'][-1]
+        gap = final_val_loss - final_train_loss
+        if gap > 0.1:
+            status = "Overfitting detected"
+            status_color = 'red'
+        elif gap < -0.05:
+            status = "Underfitting detected"
+            status_color = 'orange'
+        else:
+            status = "Good fit"
+            status_color = 'green'
+        axes[0].text(0.02, 0.98, status, transform=axes[0].transAxes, fontsize=11,
+                    fontweight='bold', color=status_color, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    # 右圖：Precision, Recall, F1 對比
+    axes[1].plot(epochs, history['val_f1_macro'], 'g-o', linewidth=2, markersize=5, label='F1 Macro')
+    axes[1].plot(epochs, history['val_precision'], 'b-s', linewidth=2, markersize=5, label='Precision')
+    axes[1].plot(epochs, history['val_recall'], 'r-^', linewidth=2, markersize=5, label='Recall')
+    axes[1].set_xlabel('Epoch', fontsize=12, fontweight='bold')
+    axes[1].set_ylabel('Score', fontsize=12, fontweight='bold')
+    axes[1].set_title('Validation Metrics Comparison', fontsize=14, fontweight='bold')
+    axes[1].legend(fontsize=10)
+    axes[1].grid(True, alpha=0.3)
+
     plt.tight_layout()
-    save_path = save_dir / 'per_class_f1_curves.png'
+    save_path = save_dir / 'train_val_comparison.png'
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"  [SAVED] {save_path.name}")
     plt.close()
+
+    # ========== 4. 混淆矩陣 (Confusion Matrix) ==========
+    if 'confusion_matrix' in test_metrics:
+        cm = np.array(test_metrics['confusion_matrix'])
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        fig.suptitle('Confusion Matrix (Test Set)', fontsize=16, fontweight='bold')
+
+        # 左圖：數值混淆矩陣
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0],
+                    xticklabels=class_names, yticklabels=class_names,
+                    annot_kws={'size': 14, 'fontweight': 'bold'})
+        axes[0].set_xlabel('Predicted', fontsize=12, fontweight='bold')
+        axes[0].set_ylabel('Actual', fontsize=12, fontweight='bold')
+        axes[0].set_title('Counts', fontsize=14, fontweight='bold')
+
+        # 右圖：正規化混淆矩陣（百分比）
+        cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis] * 100
+        sns.heatmap(cm_normalized, annot=True, fmt='.1f', cmap='Blues', ax=axes[1],
+                    xticklabels=class_names, yticklabels=class_names,
+                    annot_kws={'size': 14, 'fontweight': 'bold'})
+        axes[1].set_xlabel('Predicted', fontsize=12, fontweight='bold')
+        axes[1].set_ylabel('Actual', fontsize=12, fontweight='bold')
+        axes[1].set_title('Percentage (%)', fontsize=14, fontweight='bold')
+
+        plt.tight_layout()
+        save_path = save_dir / 'confusion_matrix.png'
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
 
     # 3. 生成訓練報告
     report_lines = []
@@ -310,8 +229,10 @@ def generate_training_visualizations(results, save_dir):
     args = results['args']
     report_lines.append("Configuration:")
     report_lines.append(f"  Model: {args['bert_model']}")
-    report_lines.append(f"  PMAC: {'Enabled (Selective)' if args['use_pmac'] else 'Disabled'}")
-    report_lines.append(f"  IARM: {'Enabled (Transformer)' if args['use_iarm'] else 'Disabled'}")
+    if args.get('baseline'):
+        report_lines.append(f"  Type: Baseline - {args['baseline']}")
+    elif args.get('improved'):
+        report_lines.append(f"  Type: Improved - {args['improved']}")
     report_lines.append(f"  Loss Type: {args.get('loss_type', 'ce')}")
     if args.get('loss_type') == 'focal':
         report_lines.append(f"  Focal Gamma: {args.get('focal_gamma', 2.0)}")
@@ -374,7 +295,6 @@ def generate_training_visualizations(results, save_dir):
     report_path = save_dir / 'training_report.txt'
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(report_lines))
-    print(f"  [SAVED] {report_path.name}")
 
 
 def compute_multi_aspect_loss(
@@ -443,12 +363,15 @@ def analyze_gate_statistics(all_gates):
     return stats
 
 
-def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, collect_gates=False):
+def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, collect_gates=False, return_confusion_matrix=False):
     """
     評估 multi-aspect 模型
 
     返回 aspect-level 指標（展開為獨立的 aspect-sentiment pairs）
     同時計算 validation loss
+
+    參數:
+        return_confusion_matrix: 是否返回混淆矩陣（用於視覺化）
     """
     model.eval()
 
@@ -578,14 +501,18 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     if layer_attention_weights is not None:
         result['layer_attention'] = layer_attention_weights.tolist()
 
+    # 加入混淆矩陣（用於視覺化）
+    if return_confusion_matrix:
+        from sklearn.metrics import confusion_matrix
+        cm = confusion_matrix(valid_labels, valid_preds, labels=[0, 1, 2])
+        result['confusion_matrix'] = cm.tolist()
+
     return result
 
 
 def train_multiaspect_model(args):
     """訓練 Multi-Aspect 模型"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"\nDevice: {device}")
-
     # 創建時間戳資料夾
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     project_root = Path(__file__).parent.parent
@@ -602,21 +529,19 @@ def train_multiaspect_model(args):
         exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
         exp_name += f"_{args.loss_type}"
     else:
-        # Full Model 實驗
-        exp_name = f"{'pmac' if args.use_pmac else 'nopmac'}_{'iarm' if args.use_iarm else 'noiarm'}"
+        # Improved 實驗 (沒有指定 --baseline 時)
+        exp_name = f"improved_{args.improved}"
         exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
         exp_name += f"_{args.loss_type}"
 
     # 時間戳實驗資料夾
     # Baseline 實驗保存在 results/baseline/{dataset}/ 下
     # Improved 實驗保存在 results/improved/{dataset}/ 下
-    # Full Model 實驗保存在 results/experiments/ 下
     if args.baseline:
         exp_dir = project_root / 'results' / 'baseline' / args.dataset / f"{timestamp}_{exp_name}"
-    elif args.improved:
-        exp_dir = project_root / 'results' / 'improved' / args.dataset / f"{timestamp}_{exp_name}"
     else:
-        exp_dir = project_root / 'results' / 'experiments' / f"{timestamp}_{exp_name}"
+        # Improved 模型
+        exp_dir = project_root / 'results' / 'improved' / args.dataset / f"{timestamp}_{exp_name}"
 
     checkpoints_dir = exp_dir / 'checkpoints'
     visualizations_dir = exp_dir / 'visualizations'
@@ -626,15 +551,11 @@ def train_multiaspect_model(args):
     for dir_path in [checkpoints_dir, visualizations_dir, reports_dir]:
         dir_path.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n實驗資料夾: {exp_dir}")
-    print(f"  Checkpoints: {checkpoints_dir}")
-    print(f"  Visualizations: {visualizations_dir}")
-    print(f"  Reports: {reports_dir}")
+    print(f"  Output: {exp_dir.name}")
 
     # 加載數據
-    print("\n" + "="*80)
-    print("加載 Multi-Aspect 數據")
-    print("="*80)
+    print("\n" + "-"*60)
+    print("Loading Data")
 
     # 根據 dataset 參數設置數據路徑
     if args.dataset == 'restaurants':
@@ -658,12 +579,8 @@ def train_multiaspect_model(args):
     else:
         raise ValueError(f"不支援的數據集: {args.dataset}")
 
-    print(f"數據集: {args.dataset.upper()}")
-
     # MAMS 數據集的特殊處理
     if args.dataset == 'mams':
-        print("使用 MAMS-ATSA 數據集 (100% 多面向場景)")
-        print("注意: MAMS 已包含預分割的 train/val/test，不使用數據增強")
 
         # MAMS 數據路徑
         train_path = project_root / 'data' / 'raw' / 'MAMS-ATSA' / train_xml
@@ -681,8 +598,6 @@ def train_multiaspect_model(args):
         )
     elif args.dataset.startswith('memd_'):
         # MEMD-ABSA 數據集
-        print(f"使用 MEMD-ABSA 數據集 - {memd_domain} 領域")
-        print("注意: MEMD 為多領域數據集，自動分割 10% 作為驗證集")
 
         # MEMD 數據路徑
         memd_dir = project_root / 'data' / 'raw' / 'MEMD-ABSA'
@@ -701,10 +616,7 @@ def train_multiaspect_model(args):
         use_augmented = getattr(args, 'use_augmented', False)
 
         if use_augmented:
-            print("⚠️  警告: 數據增強功能已被移除（augmented_dataset 已封存）")
-            print("   將使用原始數據集繼續訓練...")
-
-        print("使用原始數據集")
+            pass  # 數據增強已移除
         # 數據路徑
         train_path = project_root / 'data' / 'raw' / 'semeval2014' / train_xml
         test_path = project_root / 'data' / 'raw' / 'semeval2014' / test_xml
@@ -723,17 +635,28 @@ def train_multiaspect_model(args):
         val_samples = train_all_samples[:val_size]
         train_samples = train_all_samples[val_size:]
 
-    print(f"\n數據分割:")
-    print(f"  訓練: {len(train_samples)}")
-    print(f"  驗證: {len(val_samples)}")
-    print(f"  測試: {len(test_samples)}")
+    print(f"  Train: {len(train_samples)} | Val: {len(val_samples)} | Test: {len(test_samples)}")
 
-    # 加載 tokenizer
-    print(f"\n加載 {args.bert_model} tokenizer...")
+    # 自動模型選擇
+    if args.auto_select and not args.baseline and not args.improved:
+        # 分析數據集特徵
+        dataset_stats = analyze_dataset(train_samples)
+        print_dataset_stats(dataset_stats, args.dataset.upper())
+
+        # 自動選擇模型
+        selected_model, reason = select_model(dataset_stats)
+        print_selection_result(selected_model, reason)
+
+        # 設定模型類型
+        args.improved = selected_model
+
+        # 應用推薦配置
+        recommended_config = get_model_config(selected_model, args.dataset)
+        if args.dropout == 0.1:  # 使用默認值時才覆蓋
+            args.dropout = recommended_config['dropout']
+
+    # 加載 tokenizer 和創建 DataLoaders
     tokenizer = AutoTokenizer.from_pretrained(args.bert_model)
-
-    # 創建 DataLoaders
-    print("\n創建 DataLoaders...")
     train_loader, val_loader, test_loader = create_multiaspect_dataloaders(
         train_samples=train_samples,
         val_samples=val_samples,
@@ -746,12 +669,9 @@ def train_multiaspect_model(args):
     )
 
     # 創建模型
-    print("\n" + "="*80)
-
-    # 根據參數選擇模型
+    print("\n" + "-"*60)
     if args.baseline:
-        print(f"創建 Baseline 模型: {args.baseline}")
-        print("="*80)
+        print(f"Creating Model: Baseline-{args.baseline}")
         model = create_baseline(
             baseline_type=args.baseline,
             bert_model_name=args.bert_model,
@@ -760,15 +680,8 @@ def train_multiaspect_model(args):
             num_classes=3,
             dropout=args.dropout
         ).to(device)
-
-        print(f"\n模型配置:")
-        print(f"  模型類型: Baseline - {args.baseline}")
-        print(f"  BERT: {args.bert_model}")
-        print(f"  Dropout: {args.dropout}")
-
-    elif args.improved:
-        print(f"創建 Improved 模型: {args.improved}")
-        print("="*80)
+    else:
+        print(f"Creating Model: {args.improved}")
         model = create_improved_model(
             model_type=args.improved,
             bert_model_name=args.bert_model,
@@ -778,41 +691,7 @@ def train_multiaspect_model(args):
             dropout=args.dropout
         ).to(device)
 
-        print(f"\n模型配置:")
-        print(f"  模型類型: Improved - {args.improved}")
-        print(f"  BERT: {args.bert_model}")
-        print(f"  Dropout: {args.dropout}")
-
-    else:
-        print("創建 Multi-Aspect HMAC-Net (Full Model)")
-        print("="*80)
-        model = HMACNetMultiAspect(
-            bert_model_name=args.bert_model,
-            freeze_bert=args.freeze_bert,
-            hidden_dim=args.hidden_dim,
-            num_classes=3,
-            dropout=args.dropout,
-            use_pmac=args.use_pmac,
-            gate_bias_init=args.gate_bias_init,
-            gate_weight_gain=args.gate_weight_gain,
-            use_iarm=args.use_iarm,
-            iarm_num_heads=args.iarm_heads,
-            iarm_num_layers=args.iarm_layers
-        ).to(device)
-
-        print(f"\n模型配置:")
-        print(f"  BERT: {args.bert_model}")
-        print(f"  Hidden dim: {args.hidden_dim}")
-        print(f"  Dropout: {args.dropout}")
-        print(f"  PMAC: {'Enabled (Selective)' if args.use_pmac else 'Disabled'}")
-        print(f"  IARM: {'Enabled (Transformer)' if args.use_iarm else 'Disabled'}")
-
-    print(f"\n訓練配置:")
-    print(f"  Batch size: {args.batch_size}")
-    print(f"  Accumulation steps: {args.accumulation_steps}")
-    print(f"  Effective batch size: {args.batch_size * args.accumulation_steps}")
-    print(f"  Learning rate: {args.lr}")
-    print(f"  Use scheduler: {args.use_scheduler}")
+    print(f"  BERT: {args.bert_model} | Dropout: {args.dropout}")
 
     # 優化器
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -844,17 +723,16 @@ def train_multiaspect_model(args):
             schedulers=[warmup_scheduler, cosine_scheduler],
             milestones=[warmup_steps]
         )
-
-        print(f"\n學習率調度器:")
-        print(f"  Total steps: {total_steps}")
-        print(f"  Warmup steps: {warmup_steps} ({args.warmup_ratio*100:.0f}%)")
-        print(f"  Cosine annealing: {total_steps - warmup_steps} steps")
-        print(f"  LR range: {args.lr*0.01:.2e} -> {args.lr:.2e} -> 1e-7")
+        print(f"  Scheduler: Warmup({warmup_steps}) + Cosine({total_steps - warmup_steps})")
 
     # 訓練
-    print("\n" + "="*80)
-    print("開始訓練")
-    print("="*80)
+    print("\n" + "-"*60)
+    print("Training" + (" [AMP]" if device.type == 'cuda' else ""))
+    print("-"*60)
+
+    # 混合精度訓練 (AMP)
+    use_amp = device.type == 'cuda'
+    scaler = GradScaler(enabled=use_amp)
 
     best_val_f1 = 0
     best_epoch = 0
@@ -888,37 +766,40 @@ def train_multiaspect_model(args):
             aspect_mask = batch['aspect_mask'].to(device)
             is_virtual = batch['is_virtual'].to(device)
 
-            # Forward
-            logits, extras = model(text_ids, text_mask, aspect_ids, aspect_mask_input, aspect_mask)
+            # Forward + Loss (with AMP autocast)
+            with autocast(device_type='cuda', enabled=use_amp):
+                logits, extras = model(text_ids, text_mask, aspect_ids, aspect_mask_input, aspect_mask)
 
-            # Loss
-            if args.loss_type != 'ce':
-                # 使用 Focal Loss 或 Adaptive Loss
-                if 'loss_fn' not in locals():
-                    loss_fn = get_loss_function(
-                        loss_type=args.loss_type,
-                        alpha=args.class_weights,
-                        gamma=args.focal_gamma,
+                # Loss
+                if args.loss_type != 'ce':
+                    # 使用 Focal Loss 或 Adaptive Loss
+                    if 'loss_fn' not in locals():
+                        loss_fn = get_loss_function(
+                            loss_type=args.loss_type,
+                            alpha=args.class_weights,
+                            gamma=args.focal_gamma,
+                            virtual_weight=args.virtual_weight
+                        ).to(device)
+                    loss = loss_fn(logits, labels, aspect_mask, is_virtual)
+                else:
+                    # 使用標準 CE Loss
+                    loss = compute_multi_aspect_loss(
+                        logits, labels, aspect_mask, is_virtual,
                         virtual_weight=args.virtual_weight
-                    ).to(device)
-                loss = loss_fn(logits, labels, aspect_mask, is_virtual)
-            else:
-                # 使用標準 CE Loss
-                loss = compute_multi_aspect_loss(
-                    logits, labels, aspect_mask, is_virtual,
-                    virtual_weight=args.virtual_weight
-                )
+                    )
 
-            # 梯度累積：將 loss 除以累積步數
-            loss = loss / args.accumulation_steps
+                # 梯度累積：將 loss 除以累積步數
+                loss = loss / args.accumulation_steps
 
-            # Backward
-            loss.backward()
+            # Backward (with AMP scaler)
+            scaler.scale(loss).backward()
 
             # 每 accumulation_steps 步更新一次參數
             if (batch_idx + 1) % args.accumulation_steps == 0:
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 optimizer.zero_grad()
 
                 # 更新學習率
@@ -951,83 +832,59 @@ def train_multiaspect_model(args):
         history['val_recall'].append(float(val_metrics['recall']))
         history['val_f1_per_class'].append([float(f1) for f1 in val_metrics['f1_per_class']])
 
-        print(f"\nEpoch {epoch+1}/{args.epochs}")
-        print(f"  Train Loss: {avg_train_loss:.4f}")
-        print(f"  Val Accuracy: {val_metrics['accuracy']:.4f}")
-        print(f"  Val F1 (Macro): {val_metrics['f1_macro']:.4f}")
-        print(f"  Val Precision: {val_metrics['precision']:.4f}")
-        print(f"  Val Recall: {val_metrics['recall']:.4f}")
-        print(f"  Val F1 per class: {val_metrics['f1_per_class']}")
+        # 簡化的 epoch 輸出（AGG 風格）
+        val_f1 = val_metrics['f1_macro']
+        val_acc = val_metrics['accuracy']
+        f1_per_class = val_metrics['f1_per_class']
 
-        # Early stopping
-        if val_metrics['f1_macro'] > best_val_f1:
-            best_val_f1 = val_metrics['f1_macro']
+        # Early stopping 檢查
+        improved = val_f1 > best_val_f1
+        if improved:
+            best_val_f1 = val_f1
             best_epoch = epoch + 1
             patience_counter = 0
-
-            # 如果使用Selective PMAC，收集gate統計 (baseline 沒有 gate)
-            if args.use_pmac and not args.baseline:
-                print("\n  [Gate Analysis] 收集Selective PMAC的gate統計...")
-                gate_metrics = evaluate_multi_aspect(model, val_loader, device, loss_fn_for_eval, args, collect_gates=True)
-                if 'gate_stats' in gate_metrics:
-                    gate_stats = gate_metrics['gate_stats']
-                    print(f"  Gate Mean: {gate_stats['mean']:.4f} ± {gate_stats['std']:.4f}")
-                    print(f"  Gate Range: [{gate_stats['min']:.4f}, {gate_stats['max']:.4f}]")
-                    print(f"  Gate Median: {gate_stats['median']:.4f}")
-                    print(f"  Sparsity (< 0.1): {gate_stats['sparsity']*100:.1f}%")
-                    print(f"  Activation Rate (> 0.5): {gate_stats['activation_rate']*100:.1f}%")
-
-            # 保存最佳模型到時間戳資料夾
+            # 保存最佳模型
             save_path = checkpoints_dir / f'best_model_epoch{epoch+1}_f1_{best_val_f1:.4f}.pt'
             torch.save(model.state_dict(), save_path)
-            print(f"  [SAVED] Best model: {save_path.name}")
+            status = f"★ Best"
         else:
             patience_counter += 1
-            print(f"  Patience: {patience_counter}/{args.patience}")
+            status = f"P:{patience_counter}/{args.patience}"
 
-            if patience_counter >= args.patience:
-                print("\nEarly stopping!")
-                break
+        # 單行輸出：Epoch | Loss | Acc | F1 | Per-class F1 | Status
+        print(f"  [{epoch+1:02d}/{args.epochs}] Loss:{avg_train_loss:.4f} | Acc:{val_acc:.4f} | "
+              f"F1:{val_f1:.4f} [N:{f1_per_class[0]:.2f} U:{f1_per_class[1]:.2f} P:{f1_per_class[2]:.2f}] | {status}")
+
+        if patience_counter >= args.patience:
+            print(f"\n  Early stopping at epoch {epoch+1}")
+            break
 
     # 測試階段
-    print("\n" + "="*80)
-    print("測試集評估")
-    print("="*80)
+    print("\n" + "-"*60)
+    print(f"Testing (Best: Epoch {best_epoch}, Val F1: {best_val_f1:.4f})")
+    print("-"*60)
 
     # 加載最佳模型
     best_model_path = checkpoints_dir / f'best_model_epoch{best_epoch}_f1_{best_val_f1:.4f}.pt'
     model.load_state_dict(torch.load(best_model_path))
 
     # 測試集評估（也計算 loss）
-    # 如果使用Selective PMAC，收集gate統計 (baseline 沒有 gate)
-    collect_test_gates = args.use_pmac and not args.baseline  # Selective PMAC 總是收集 gate 統計
     loss_fn_for_eval = loss_fn if args.loss_type != 'ce' else None
-    test_metrics = evaluate_multi_aspect(model, test_loader, device, loss_fn_for_eval, args, collect_gates=collect_test_gates)
+    test_metrics = evaluate_multi_aspect(
+        model, test_loader, device, loss_fn_for_eval, args,
+        collect_gates=False,
+        return_confusion_matrix=True  # 收集混淆矩陣用於視覺化
+    )
 
-    print(f"\n測試集結果:")
-    print(f"  Accuracy: {test_metrics['accuracy']:.4f}")
-    print(f"  F1 (Macro): {test_metrics['f1_macro']:.4f}")
-    print(f"  Precision: {test_metrics['precision']:.4f}")
-    print(f"  Recall: {test_metrics['recall']:.4f}")
-    print(f"  F1 per class (neg/neu/pos): {test_metrics['f1_per_class']}")
+    # 簡化的測試結果輸出
+    test_f1_class = test_metrics['f1_per_class']
+    print(f"  Acc: {test_metrics['accuracy']:.4f} | F1: {test_metrics['f1_macro']:.4f} "
+          f"[N:{test_f1_class[0]:.2f} U:{test_f1_class[1]:.2f} P:{test_f1_class[2]:.2f}]")
 
-    # 輸出gate統計
-    if 'gate_stats' in test_metrics:
-        gate_stats = test_metrics['gate_stats']
-        print(f"\nSelective PMAC Gate Statistics:")
-        print(f"  Gate Mean: {gate_stats['mean']:.4f} ± {gate_stats['std']:.4f}")
-        print(f"  Gate Range: [{gate_stats['min']:.4f}, {gate_stats['max']:.4f}]")
-        print(f"  Sparsity (< 0.1): {gate_stats['sparsity']*100:.1f}%")
-        print(f"  Activation Rate (> 0.5): {gate_stats['activation_rate']*100:.1f}%")
-
-    # 輸出 HBL layer attention 權重
+    # HBL layer attention 權重（如果有）
     if 'layer_attention' in test_metrics:
-        layer_weights = test_metrics['layer_attention']
-        print(f"\nHBL Layer-wise Attention Weights:")
-        print(f"  Low-level:  {layer_weights[0]:.4f}")
-        print(f"  Mid-level:  {layer_weights[1]:.4f}")
-        print(f"  High-level: {layer_weights[2]:.4f}")
-        print(f"  註解: 權重經過 softmax 歸一化，總和為 1.0")
+        w = test_metrics['layer_attention']
+        print(f"  Layer Weights: Low={w[0]:.3f} Mid={w[1]:.3f} High={w[2]:.3f}")
 
     # 保存結果
     results = {
@@ -1046,24 +903,17 @@ def train_multiaspect_model(args):
     results_path = reports_dir / 'experiment_results.json'
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
-    print(f"\n結果已保存: {results_path}")
 
     # 保存實驗配置
     config_path = reports_dir / 'experiment_config.json'
     with open(config_path, 'w') as f:
         json.dump(vars(args), f, indent=2, default=str)
-    print(f"配置已保存: {config_path}")
 
-    # 自動生成訓練曲線圖表
-    print("\n" + "="*80)
-    print("生成訓練曲線圖表")
-    print("="*80)
-
+    # 自動生成訓練曲線圖表（靜默模式）
     try:
         generate_training_visualizations(results, visualizations_dir)
-        print(f"\n[COMPLETE] All visualizations saved to: {visualizations_dir}")
     except Exception as e:
-        print(f"\n[WARNING] Failed to generate visualizations: {e}")
+        print(f"  [WARNING] Visualization failed: {e}")
 
     # 生成實驗摘要
     summary_path = reports_dir / 'experiment_summary.txt'
@@ -1077,9 +927,7 @@ def train_multiaspect_model(args):
         if args.baseline:
             f.write(f"  模型類型: Baseline - {args.baseline}\n")
         else:
-            f.write(f"  模型類型: Full HMAC-Net\n")
-            f.write(f"  PMAC: {'Enabled' if args.use_pmac else 'Disabled'}\n")
-            f.write(f"  IARM: {'Enabled' if args.use_iarm else 'Disabled'}\n")
+            f.write(f"  模型類型: Improved - {args.improved}\n")
         f.write(f"  Dropout: {args.dropout}\n")
         f.write(f"  Batch Size: {args.batch_size} x {args.accumulation_steps} = {args.batch_size * args.accumulation_steps}\n")
         f.write(f"  Loss Type: {args.loss_type}\n")
@@ -1106,9 +954,10 @@ def train_multiaspect_model(args):
         f.write(f"  配置JSON: {config_path}\n")
         f.write(f"  可視化: {visualizations_dir}\n")
 
-    print(f"\n實驗摘要已保存: {summary_path}")
-    print("\n[COMPLETE] Training finished!")
-    print(f"\n所有實驗結果已保存至: {exp_dir}")
+    # 完成訊息
+    print("\n" + "="*60)
+    print(f"DONE | Test F1: {test_metrics['f1_macro']:.4f} | Saved: {exp_dir.name}")
+    print("="*60)
 
 
 def main():
@@ -1145,14 +994,15 @@ def main():
                         choices=['bert_cls', 'bert_only'],  # bert_only 為向後兼容
                         help='使用 baseline 模型 (bert_cls: 標準BERT-CLS baseline)')
     parser.add_argument('--improved', type=str, default=None,
-                        choices=['hierarchical', 'hierarchical_layerattn', 'iarn'],
+                        choices=['hierarchical', 'hierarchical_layerattn', 'iarn', 'vp_iarn'],
                         help='使用改進模型:\n'
-                             '  - hierarchical: Hierarchical BERT (固定拼接)\n'
-                             '  - hierarchical_layerattn: HBL (Layer-wise Attention)\n'
-                             '  - iarn: Inter-Aspect Relation Network (Aspect交互建模)')
+                             '  - hierarchical: Hierarchical BERT (適合單面向為主)\n'
+                             '  - iarn: Inter-Aspect Relation Network (適合多面向為主)')
+    parser.add_argument('--auto_select', action='store_true',
+                        help='根據數據集特徵自動選擇最佳模型 (Hierarchical BERT 或 IARN)')
 
     # 模型參數
-    parser.add_argument('--bert_model', type=str, default='distilbert-base-uncased',
+    parser.add_argument('--bert_model', type=str, default='bert-base-uncased',
                         help='BERT 模型名稱')
     parser.add_argument('--freeze_bert', action='store_true',
                         help='是否凍結 BERT')
@@ -1160,27 +1010,6 @@ def main():
                         help='隱藏層維度（建議保持 768）')
     parser.add_argument('--dropout', type=float, default=0.1,
                         help='Dropout 比率')
-
-    # PMAC 參數 (Selective PMAC - 本論文核心創新)
-    parser.add_argument('--use_pmac', action='store_true', default=False,
-                        help='是否使用 Selective PMAC')
-    parser.add_argument('--gate_bias_init', type=float, default=-3.0,
-                        help='Gate 偏置初始值 (-2.0≈0.12, -3.0≈0.05, -4.0≈0.02)')
-    parser.add_argument('--gate_weight_gain', type=float, default=0.1,
-                        help='Gate 權重初始化增益')
-    parser.add_argument('--gate_sparsity_weight', type=float, default=0.0,
-                        help='Gate 稀疏性正則化權重 (0=不使用, 推薦0.001-0.01)')
-    parser.add_argument('--gate_sparsity_type', type=str, default='l1',
-                        choices=['l1', 'l2', 'hoyer', 'target'],
-                        help='Gate 稀疏性正則化類型')
-
-    # IARM 參數 (Transformer-based Inter-Aspect Relation Modeling)
-    parser.add_argument('--use_iarm', action='store_true', default=False,
-                        help='是否使用 IARM (Transformer)')
-    parser.add_argument('--iarm_heads', type=int, default=4,
-                        help='IARM Transformer 注意力頭數')
-    parser.add_argument('--iarm_layers', type=int, default=2,
-                        help='IARM Transformer 層數')
 
     # 訓練參數
     parser.add_argument('--batch_size', type=int, default=16,
@@ -1226,14 +1055,17 @@ def main():
     # 確保 CUDA 的確定性行為
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    print(f"\n[OK] 隨機種子已設置: {args.seed}")
 
-    print("\n" + "="*80)
-    print("Multi-Aspect HMAC-Net 訓練")
-    print("="*80)
-    print("\n配置:")
-    for key, value in vars(args).items():
-        print(f"  {key}: {value}")
+    # 簡化的啟動資訊
+    print("\n" + "="*60)
+    print("Multi-Aspect ABSA Training")
+    print("="*60)
+
+    # 只顯示關鍵配置
+    model_type = args.baseline if args.baseline else args.improved
+    print(f"  Model: {model_type} | Dataset: {args.dataset}")
+    print(f"  Epochs: {args.epochs} | Batch: {args.batch_size}x{args.accumulation_steps} | LR: {args.lr}")
+    print(f"  Loss: {args.loss_type} | Patience: {args.patience} | Seed: {args.seed}")
 
     train_multiaspect_model(args)
 

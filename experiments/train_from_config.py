@@ -34,6 +34,10 @@ def config_to_args(config):
     """將 YAML 配置轉換為命令行參數"""
     args = []
 
+    # 自動選擇模式
+    if config.get('auto_select'):
+        args.append('--auto_select')
+
     # 模型配置
     if 'model' in config:
         model_cfg = config['model']
@@ -191,17 +195,7 @@ def main():
         print(f"錯誤: 配置文件不存在: {config_path}")
         return
 
-    print(f"\n{'='*80}")
-    print(f"載入配置文件: {config_path}")
-    print(f"數據集: {args.dataset.upper()}")
-    print(f"{'='*80}\n")
-
     config = load_config(config_path)
-
-    # 顯示配置
-    print("實驗配置:")
-    print(yaml.dump(config, default_flow_style=False, allow_unicode=True))
-    print(f"{'='*80}\n")
 
     # 轉換為命令行參數
     train_args = config_to_args(config)
@@ -211,16 +205,10 @@ def main():
 
     # 添加覆蓋參數
     if args.override:
-        print(f"覆蓋參數: {' '.join(args.override)}\n")
         train_args.extend(args.override)
 
     # 調用訓練主函數
     sys.argv = ['train_multiaspect.py'] + train_args
-
-    print(f"執行訓練命令:")
-    print(f"  python experiments/train_multiaspect.py {' '.join(train_args)}")
-    print(f"\n{'='*80}\n")
-
     train_main()
 
 

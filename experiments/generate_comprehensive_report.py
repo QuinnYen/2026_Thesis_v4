@@ -5,9 +5,12 @@
 
 模型架構:
 - Baseline: BERT-CLS (使用 [CLS] token)
-- Method 1: Hierarchical BERT (階層式特徵提取，固定拼接)
-- Method 2: HBL (Hierarchical BERT + Layer-wise Attention) [已放棄]
-- Method 3: IARN (Inter-Aspect Relation Network) [主要貢獻]
+- Method 1: Hierarchical BERT (階層式特徵提取，適合單 aspect 場景)
+- Method 2: IARN (Inter-Aspect Relation Network，適合多 aspect 場景)
+
+場景自適應策略:
+- 單 aspect 為主 (Restaurants/Laptops) → Hierarchical BERT
+- 多 aspect 為主 (MAMS) → IARN
 
 使用方法:
     python experiments/generate_comprehensive_report.py --dataset restaurants
@@ -59,6 +62,8 @@ def find_all_experiments(results_dir, dataset):
             dir_name = exp_dir.name
             if '_improved_hierarchical_layerattn_' in dir_name:
                 exp_type = 'hierarchical_layerattn'
+            elif '_improved_vp_iarn_' in dir_name:
+                exp_type = 'vp_iarn'
             elif '_improved_iarn_' in dir_name:
                 exp_type = 'iarn'
             elif '_improved_hierarchical_' in dir_name:
@@ -86,10 +91,28 @@ def read_metrics(exp_dir):
         'test_f1_pos': None,
         'val_f1': None,
         'best_epoch': None,
+        'total_epochs': None,  # 配置的總 epochs
+        'patience': None,  # early stopping patience
+        'class_weights': None,  # 類別權重
+        'focal_gamma': None,  # focal loss gamma
         'timestamp': None,
         'exp_name': exp_dir.name,
         'layer_attention': None  # HBL 特有
     }
+
+    # 從 experiment_config.json 讀取訓練配置
+    config_file = exp_dir / "reports" / "experiment_config.json"
+    if config_file.exists():
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                training_config = config.get('training', {})
+                metrics['total_epochs'] = training_config.get('epochs')
+                metrics['patience'] = training_config.get('patience')
+                metrics['class_weights'] = training_config.get('class_weights')
+                metrics['focal_gamma'] = training_config.get('focal_gamma')
+        except Exception as e:
+            print(f"    讀取配置錯誤: {e}")
 
     # 從 experiment_results.json 讀取
     results_file = exp_dir / "reports" / "experiment_results.json"
@@ -126,6 +149,12 @@ def read_metrics(exp_dir):
                 # 讀取 layer attention (HBL 特有)
                 if 'layer_attention' in data:
                     metrics['layer_attention'] = data['layer_attention']
+
+                # 讀取 VP-IARN 特有指標
+                if 'adaptive_alpha' in data:
+                    metrics['adaptive_alpha'] = data['adaptive_alpha']
+                if 'multi_aspect_ratio' in data:
+                    metrics['multi_aspect_ratio'] = data['multi_aspect_ratio']
         except Exception as e:
             print(f"    讀取錯誤: {e}")
 
@@ -143,129 +172,156 @@ def read_metrics(exp_dir):
 def generate_text_report(dataset, results):
     """生成純文字報告"""
     report = []
-    report.append("=" * 100)
-    report.append(f"階層式 BERT 實驗綜合報告 - {dataset.upper()} 數據集")
-    report.append("=" * 100)
+    report.append("=" * 80)
+    report.append(f"Multi-Aspect ABSA 實驗報告 - {dataset.upper()} Dataset")
+    report.append("=" * 80)
     report.append(f"\n生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     # 架構說明
-    report.append("-" * 100)
+    report.append("-" * 80)
     report.append("模型架構")
-    report.append("-" * 100)
+    report.append("-" * 80)
     report.append("  Baseline:  BERT-CLS")
     report.append("             標準 BERT baseline，使用 [CLS] token")
     report.append("             參考: Devlin et al. (2019) BERT")
     report.append("")
     report.append("  Method 1:  Hierarchical BERT (階層式BERT)")
     report.append("             從 BERT 不同層提取 Low/Mid/High 層級特徵")
-    report.append("             固定 concatenation 組合")
+    report.append("             適用於單面向為主的數據集 (如 Restaurants, Laptops)")
     report.append("")
-    report.append("  Method 2:  HBL (Hierarchical BERT + Layer-wise Attention)")
-    report.append("             基於 UDify (Kondratyuk & Straka, EMNLP 2019)")
-    report.append("             動態學習層級權重，替代固定拼接")
-    report.append("")
-    report.append("  Method 3:  IARN (Inter-Aspect Relation Network)")
+    report.append("  Method 2:  IARN (Inter-Aspect Relation Network)")
     report.append("             顯式建模多個 aspects 之間的交互關係")
     report.append("             Aspect-to-Aspect Attention + Relation-aware Gating")
-    report.append("             與 HPNet (2021) 差異化創新")
+    report.append("             適用於多面向數據集 (如 MAMS)")
     report.append("")
 
-    # 實驗配置
-    report.append("-" * 100)
+    # 實驗配置 - 從實際實驗讀取
+    report.append("-" * 80)
     report.append("實驗配置")
-    report.append("-" * 100)
-    report.append("  Epochs:        30")
+    report.append("-" * 80)
+
+    # 嘗試從第一個有效結果讀取配置
+    first_valid = next((r for r in results if r.get('total_epochs')), None)
+    if first_valid:
+        epochs = first_valid.get('total_epochs', 'N/A')
+        patience = first_valid.get('patience', 'N/A')
+        class_weights = first_valid.get('class_weights', 'N/A')
+        focal_gamma = first_valid.get('focal_gamma', 'N/A')
+    else:
+        # 使用預設值 (VP-ACL 策略)
+        if dataset == 'mams':
+            epochs, patience, focal_gamma = 40, 12, 2.0
+            class_weights = [1.0, 3.0, 1.0]
+        else:
+            epochs, patience, focal_gamma = 25, 8, 2.5
+            class_weights = [1.0, 5.0, 1.0]
+
+    report.append(f"  Epochs:        {epochs}")
+    report.append(f"  Patience:      {patience}")
     report.append("  Learning Rate: 2e-5")
-    report.append("  BERT Model:    DistilBERT-base-uncased")
+    report.append("  BERT Model:    BERT-base-uncased")
     report.append("  Optimizer:     AdamW")
     report.append("  Scheduler:     Cosine Annealing with Warmup (10%)")
     report.append("  Loss Type:     Focal Loss")
+    report.append(f"  Focal Gamma:   {focal_gamma}")
+    report.append(f"  Class Weights: {class_weights}")
     if dataset == 'mams':
-        report.append("  Focal Gamma:   2.0")
-        report.append("  Class Weights: [1.0, 5.0, 1.0]")
-        report.append("  Dropout:       0.45")
+        report.append("  Dropout:       0.3-0.45")
+        report.append("  說明:          MAMS 相對平衡，可充分訓練 (VP-ACL 策略)")
     else:
-        report.append("  Focal Gamma:   2.5")
-        report.append("  Class Weights: [1.0, 8.0, 1.0]")
         report.append("  Dropout:       0.3-0.4")
+        report.append("  說明:          Restaurants 不平衡，提早停止 (VP-ACL 策略)")
     report.append("")
 
-    # 實驗結果表格
-    report.append("-" * 100)
-    report.append("實驗結果對比")
-    report.append("-" * 100)
-    report.append(f"{'Model':<25} {'Test Acc':>10} {'Test F1':>10} {'Val F1':>10} "
-                  f"{'Neg F1':>10} {'Neu F1':>10} {'Pos F1':>10} {'Epoch':>6}")
-    report.append("-" * 100)
+    # 實驗結果表格 (論文標準格式：只顯示 Acc 和 Macro-F1)
+    report.append("-" * 80)
+    report.append("實驗結果對比 (Main Results)")
+    report.append("-" * 80)
+    report.append(f"{'Model':<30} {'Acc (%)':>10} {'Macro-F1 (%)':>14} {'Best/Total Epoch':>18}")
+    report.append("-" * 80)
 
     for r in results:
         model = r['description']
-        acc = f"{r['test_acc']:.4f}" if r['test_acc'] else "N/A"
-        f1 = f"{r['test_f1']:.4f}" if r['test_f1'] else "N/A"
-        val_f1 = f"{r['val_f1']:.4f}" if r['val_f1'] else "N/A"
-        f1_neg = f"{r['test_f1_neg']:.4f}" if r.get('test_f1_neg') else "N/A"
-        f1_neu = f"{r['test_f1_neu']:.4f}" if r.get('test_f1_neu') else "N/A"
-        f1_pos = f"{r['test_f1_pos']:.4f}" if r.get('test_f1_pos') else "N/A"
-        epoch = f"{r['best_epoch']}" if r['best_epoch'] else "N/A"
+        # 轉換為百分比格式 (論文標準)
+        acc = f"{r['test_acc']*100:.2f}" if r['test_acc'] else "N/A"
+        f1 = f"{r['test_f1']*100:.2f}" if r['test_f1'] else "N/A"
+        # 顯示 best_epoch / total_epochs
+        best_ep = r.get('best_epoch')
+        total_ep = r.get('total_epochs')
+        if best_ep and total_ep:
+            epoch_str = f"{best_ep}/{total_ep}"
+        elif best_ep:
+            epoch_str = f"{best_ep}"
+        else:
+            epoch_str = "N/A"
 
-        report.append(f"{model:<25} {acc:>10} {f1:>10} {val_f1:>10} "
-                     f"{f1_neg:>10} {f1_neu:>10} {f1_pos:>10} {epoch:>6}")
+        report.append(f"{model:<30} {acc:>10} {f1:>14} {epoch_str:>18}")
 
+    report.append("-" * 80)
     report.append("")
 
-    # 詳細分析
+    # Per-class F1 詳細分析 (用於錯誤分析，非主表格)
     valid_results = [r for r in results if r['test_acc']]
     if valid_results:
+        report.append("-" * 80)
+        report.append("Per-class F1 Analysis (for error analysis)")
+        report.append("-" * 80)
+        report.append(f"{'Model':<30} {'Neg F1':>12} {'Neu F1':>12} {'Pos F1':>12}")
+        report.append("-" * 80)
+
+        for r in valid_results:
+            model = r['description']
+            f1_neg = f"{r['test_f1_neg']*100:.2f}" if r.get('test_f1_neg') else "N/A"
+            f1_neu = f"{r['test_f1_neu']*100:.2f}" if r.get('test_f1_neu') else "N/A"
+            f1_pos = f"{r['test_f1_pos']*100:.2f}" if r.get('test_f1_pos') else "N/A"
+            report.append(f"{model:<30} {f1_neg:>12} {f1_neu:>12} {f1_pos:>12}")
+
+        report.append("")
+
         best_f1 = max(valid_results, key=lambda x: x['test_f1'] or 0)
         baseline_result = next((r for r in valid_results if r['type'] == 'baseline'), None)
 
-        report.append("-" * 100)
+        report.append("-" * 80)
         report.append("性能分析")
-        report.append("-" * 100)
+        report.append("-" * 80)
 
         if baseline_result:
             report.append(f"\n[Baseline] BERT-CLS:")
-            report.append(f"  Test Accuracy: {baseline_result['test_acc']:.4f}")
-            report.append(f"  Test F1:       {baseline_result['test_f1']:.4f}")
-            report.append(f"  Best Epoch:    {baseline_result['best_epoch']}")
+            report.append(f"  Accuracy:  {baseline_result['test_acc']*100:.2f}%")
+            report.append(f"  Macro-F1:  {baseline_result['test_f1']*100:.2f}%")
+            best_ep = baseline_result.get('best_epoch', 'N/A')
+            total_ep = baseline_result.get('total_epochs', 'N/A')
+            report.append(f"  Best Epoch:    {best_ep} / {total_ep}")
 
         report.append(f"\n[Best Model] {best_f1['description']}")
-        report.append(f"  Test F1:       {best_f1['test_f1']:.4f}")
-        report.append(f"  Test Accuracy: {best_f1['test_acc']:.4f}")
-        report.append(f"  Best Epoch:    {best_f1['best_epoch']}")
+        report.append(f"  Macro-F1:  {best_f1['test_f1']*100:.2f}%")
+        report.append(f"  Accuracy:  {best_f1['test_acc']*100:.2f}%")
+        best_ep = best_f1.get('best_epoch', 'N/A')
+        total_ep = best_f1.get('total_epochs', 'N/A')
+        report.append(f"  Best Epoch:    {best_ep} / {total_ep}")
 
         # 計算改進幅度
         if baseline_result and best_f1['test_f1'] and baseline_result['test_f1']:
-            improvement = best_f1['test_f1'] - baseline_result['test_f1']
-            improvement_pct = (improvement / baseline_result['test_f1']) * 100
+            improvement = (best_f1['test_f1'] - baseline_result['test_f1']) * 100
+            improvement_pct = (improvement / (baseline_result['test_f1'] * 100)) * 100
             report.append(f"\n[Improvement] 相對 Baseline 改進:")
-            report.append(f"  F1 提升:       +{improvement:.4f} ({improvement_pct:+.2f}%)")
-
-        # HBL 的 Layer Attention 權重
-        hbl_result = next((r for r in valid_results if r['model_type'] == 'hierarchical_layerattn'), None)
-        if hbl_result and hbl_result.get('layer_attention'):
-            weights = hbl_result['layer_attention']
-            report.append(f"\n[HBL Weights] 學習到的層級權重:")
-            report.append(f"  Low-level:     {weights[0]:.4f}")
-            report.append(f"  Mid-level:     {weights[1]:.4f}")
-            report.append(f"  High-level:    {weights[2]:.4f}")
-            report.append(f"  說明:          權重和為 1.0 (softmax 歸一化)")
+            report.append(f"  Macro-F1 提升: {improvement:+.2f}% ({improvement_pct:+.2f}% relative)")
 
         report.append("")
 
     # 實驗目錄
-    report.append("-" * 100)
+    report.append("-" * 80)
     report.append("實驗目錄")
-    report.append("-" * 100)
+    report.append("-" * 80)
     for r in results:
         if r['exp_name']:
             report.append(f"  {r['description']:<25} {r['exp_name']}")
     report.append("")
 
     # 結論
-    report.append("-" * 100)
+    report.append("-" * 80)
     report.append("結論")
-    report.append("-" * 100)
+    report.append("-" * 80)
     report.append("")
     report.append("根據實驗結果:")
     report.append("")
@@ -273,19 +329,21 @@ def generate_text_report(dataset, results):
     report.append("   - Hierarchical BERT 透過提取 BERT 不同層的特徵，捕捉了詞法、語義、任務三個層級的資訊")
     report.append("   - 相較於只使用 [CLS] token 的 baseline，階層特徵提供了更豐富的表示")
     report.append("")
-    report.append("2. Layer-wise Attention 的優勢")
-    report.append("   - HBL 透過可學習的權重動態組合層級特徵，避免了固定拼接的侷限")
-    report.append("   - 權重分布可提供模型決策的可解釋性")
-    report.append("")
-    report.append("3. 多面向場景的挑戰")
+    report.append("2. 場景自適應策略")
     if dataset == 'mams':
-        report.append("   - MAMS 數據集 100% 為多面向句子，是真正的多面向場景")
-        report.append("   - 階層建模在這種複雜場景下的優勢更加明顯")
+        report.append("   - MAMS 數據集 100% 為多面向句子")
+        report.append("   - IARN 的 Aspect-to-Aspect Attention 在此場景優勢明顯")
+        report.append("   - 推薦方法: IARN")
     else:
-        report.append(f"   - {dataset.upper()} 數據集約 20% 為多面向句子")
-        report.append("   - 模型需要同時處理單面向和多面向的場景")
+        report.append(f"   - {dataset.upper()} 數據集以單面向句子為主")
+        report.append("   - Hierarchical BERT 在此場景表現最佳")
+        report.append("   - 推薦方法: Hierarchical BERT")
     report.append("")
-    report.append("=" * 100)
+    report.append("3. 模型選擇指南")
+    report.append("   - 多面向比例 > 50%: 使用 IARN (Aspect-to-Aspect Attention)")
+    report.append("   - 多面向比例 ≤ 50%: 使用 Hierarchical BERT (階層特徵)")
+    report.append("")
+    report.append("=" * 80)
 
     return "\n".join(report)
 
@@ -307,8 +365,7 @@ def main():
         },
         'improved': {
             'hierarchical': "Method 1 (Hierarchical)",
-            'hierarchical_layerattn': "Method 2 (HBL)",
-            'iarn': "Method 3 (IARN)",
+            'iarn': "Method 2 (IARN)",
         }
     }
 

@@ -1,0 +1,32 @@
+================================================================================
+實驗摘要 - 20251122_234931
+================================================================================
+
+實驗配置:
+  實驗名稱: improved_vp_iarn_drop0.3_bs32x1_focal
+  模型類型: Improved - vp_iarn
+  Dropout: 0.3
+  Batch Size: 32 x 1 = 32
+  Loss Type: focal
+  Learning Rate: 2e-05
+  Epochs: 25
+
+訓練結果:
+  Best Epoch: 15
+  Best Val F1: 0.6992
+  Test Accuracy: 0.8118
+  Test F1 (Macro): 0.7269
+  Test Precision: 0.7437
+  Test Recall: 0.7162
+
+Per-Class Test F1:
+  Negative: 0.7417
+  Neutral:  0.5415
+  Positive: 0.8976
+
+文件路徑:
+  實驗資料夾: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251122_234931_improved_vp_iarn_drop0.3_bs32x1_focal
+  最佳模型: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251122_234931_improved_vp_iarn_drop0.3_bs32x1_focal\checkpoints\best_model_epoch15_f1_0.6992.pt
+  結果JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251122_234931_improved_vp_iarn_drop0.3_bs32x1_focal\reports\experiment_results.json
+  配置JSON: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251122_234931_improved_vp_iarn_drop0.3_bs32x1_focal\reports\experiment_config.json
+  可視化: D:\Quinn_SmallHouse\2026_Thesis_v4\results\improved\restaurants\20251122_234931_improved_vp_iarn_drop0.3_bs32x1_focal\visualizations

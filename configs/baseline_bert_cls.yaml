@@ -7,7 +7,7 @@ experiment_name: "baseline_bert_cls"
 # 模型配置
 model:
   baseline: "bert_cls"  # 標準 BERT-CLS baseline
-  bert_model: "distilbert-base-uncased"
+  bert_model: "bert-base-uncased"
   freeze_bert: false
   dropout: 0.3
 
@@ -25,11 +25,11 @@ data:
 training:
   batch_size: 32
   accumulation_steps: 1
-  epochs: 30
+  epochs: 25  # Restaurants 不平衡，提早停止 (VP-ACL 策略)
   lr: 2.0e-5
   weight_decay: 0.05
   grad_clip: 1.0
-  patience: 12
+  patience: 8  # 更早 early stop
   seed: 42
 
   # 調度器
@@ -39,7 +39,7 @@ training:
   # 損失函數
   loss_type: "focal"
   focal_gamma: 2.5
-  class_weights: [1.0, 8.0, 1.0]
+  class_weights: [1.0, 5.0, 1.0]  # Neutral 5x (降低避免過度補償)
 
   # Virtual aspect
   virtual_weight: 0.5

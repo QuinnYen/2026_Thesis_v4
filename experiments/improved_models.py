@@ -59,7 +59,7 @@ class HierarchicalBERT(BaseModel):
 
     def __init__(
         self,
-        bert_model_name: str = 'distilbert-base-uncased',
+        bert_model_name: str = 'bert-base-uncased',
         freeze_bert: bool = False,
         hidden_dim: int = 768,
         num_classes: int = 3,
@@ -251,7 +251,7 @@ class HierarchicalBERT_LayerAttn(BaseModel):
 
     def __init__(
         self,
-        bert_model_name: str = 'distilbert-base-uncased',
+        bert_model_name: str = 'bert-base-uncased',
         freeze_bert: bool = False,
         hidden_dim: int = 768,
         num_classes: int = 3,
@@ -499,7 +499,7 @@ class InterAspectRelationNetwork(BaseModel):
 
     def __init__(
         self,
-        bert_model_name: str = 'distilbert-base-uncased',
+        bert_model_name: str = 'bert-base-uncased',
         freeze_bert: bool = False,
         hidden_dim: int = 768,
         num_classes: int = 3,
@@ -699,9 +699,345 @@ class InterAspectRelationNetwork(BaseModel):
         return logits, extras
 
 
+class VectorProjection(nn.Module):
+    """
+    向量投影模組
+
+    核心公式: proj_v(u) = (u·v / ||v||²) * v
+
+    作用：
+        - 從聚合向量中提取與目標 aspect 相關的情感語義
+        - 過濾其他 aspects 的干擾信息
+        - 對單/多 aspect 場景都有效
+
+    參考：VP-ACL (2025) - Vector Projection for Aspect-level Sentiment
+    """
+    def __init__(self, hidden_dim: int):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+
+    def forward(self, vector: torch.Tensor, direction: torch.Tensor) -> torch.Tensor:
+        """
+        向量投影運算
+
+        Args:
+            vector: [batch, hidden] - 要投影的向量（多aspect聚合表示）
+            direction: [batch, hidden] - 投影方向（目標aspect表示）
+
+        Returns:
+            projection: [batch, hidden] - 投影結果
+        """
+        # 計算內積: u·v
+        dot_product = (vector * direction).sum(dim=-1, keepdim=True)
+        # Shape: [batch, 1]
+
+        # 計算方向向量的模平方: ||v||²
+        norm_squared = (direction * direction).sum(dim=-1, keepdim=True) + 1e-8
+        # Shape: [batch, 1]
+
+        # 投影公式: (u·v / ||v||²) * v
+        projection = (dot_product / norm_squared) * direction
+        # Shape: [batch, hidden]
+
+        return projection
+
+
+class VP_IARN(BaseModel):
+    """
+    方法 4: VP-IARN (Vector Projection enhanced Inter-Aspect Relation Network)
+
+    核心創新：結合向量投影與 Aspect-to-Aspect Attention，統一處理單/多 aspect 場景
+
+    與 VP-ACL (2025) 的差異：
+        - VP-ACL: 純向量投影，無 aspect 間顯式建模
+        - VP-IARN: 向量投影 + Aspect-to-Aspect Attention + 自適應融合
+
+    與原始 IARN 的差異：
+        - IARN: 僅依賴 Aspect-to-Aspect Attention，在單 aspect 場景失效
+        - VP-IARN: 向量投影為單 aspect 提供有效表示，自適應權重動態調整
+
+    架構：
+        1. Hierarchical Feature Extraction (Low/Mid/High BERT layers)
+        2. Multi-Aspect Aggregation (聚合所有 aspects 的表示)
+        3. Vector Projection (投影到每個目標 aspect 方向)
+        4. Aspect-to-Aspect Attention (僅多 aspect 時啟用)
+        5. Adaptive Fusion (自適應融合投影特徵與注意力特徵)
+        6. Classification
+
+    適用場景：
+        - MAMS (100% 多 aspect): 向量投影 + Attention 雙重增強
+        - Restaurants (20% 多 aspect): 向量投影為單 aspect 提供有效表示
+        - 通用 ABSA 任務
+
+    預期效果：
+        - MAMS: F1 ≈ 0.8450 (+0.5% vs IARN)
+        - Restaurants: F1 ≈ 0.7280 (+2.7% vs IARN, 超越 Baseline)
+    """
+
+    def __init__(
+        self,
+        bert_model_name: str = 'bert-base-uncased',
+        freeze_bert: bool = False,
+        hidden_dim: int = 768,
+        num_classes: int = 3,
+        dropout: float = 0.1,
+        num_attention_heads: int = 4
+    ):
+        super(VP_IARN, self).__init__()
+
+        self.hidden_dim = hidden_dim
+        self.num_classes = num_classes
+        self.num_attention_heads = num_attention_heads
+
+        # BERT with hierarchical output
+        self.bert_absa = BERTForABSA(
+            model_name=bert_model_name,
+            freeze_bert=freeze_bert
+        )
+
+        # Enable output of all hidden states
+        self.bert_absa.bert_embedding.output_hidden_states = True
+        self.bert_absa.bert_embedding.bert.config.output_hidden_states = True
+
+        bert_hidden_size = self.bert_absa.hidden_size
+
+        # Hierarchical layer indices
+        is_distilbert = 'distilbert' in bert_model_name.lower()
+
+        if is_distilbert:
+            self.low_layers = [1, 2]
+            self.mid_layers = [3, 4]
+            self.high_layers = [5, 6]
+        else:
+            self.low_layers = [1, 2, 3, 4]
+            self.mid_layers = [5, 6, 7, 8]
+            self.high_layers = [9, 10, 11, 12]
+
+        # === 1. Hierarchical Feature Projections ===
+        self.proj_low = nn.Linear(bert_hidden_size, hidden_dim)
+        self.proj_mid = nn.Linear(bert_hidden_size, hidden_dim)
+        self.proj_high = nn.Linear(bert_hidden_size, hidden_dim)
+
+        self.layer_norm_low = nn.LayerNorm(hidden_dim)
+        self.layer_norm_mid = nn.LayerNorm(hidden_dim)
+        self.layer_norm_high = nn.LayerNorm(hidden_dim)
+
+        self.dropout = nn.Dropout(dropout)
+
+        # === 2. Vector Projection Module (核心創新) ===
+        self.vector_projection = VectorProjection(hidden_dim * 3)
+
+        # === 3. Aspect-to-Aspect Attention ===
+        self.aspect_attention = nn.MultiheadAttention(
+            embed_dim=hidden_dim * 3,
+            num_heads=num_attention_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+
+        # === 4. Relation-aware Gating ===
+        self.relation_gate = nn.Sequential(
+            nn.Linear(hidden_dim * 3 * 2, hidden_dim),
+            nn.Tanh(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()
+        )
+
+        # === 5. Adaptive Fusion Weight (可學習參數) ===
+        # 控制 projection features vs attention features 的融合比例
+        # 初始化為 0.5，讓模型自己學習最佳比例
+        self.adaptive_alpha = nn.Parameter(torch.tensor(0.5))
+
+        # === 6. Final Classifier ===
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim * 3, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_classes)
+        )
+
+    def _extract_hierarchical_features(
+        self,
+        text_input_ids: torch.Tensor,
+        text_attention_mask: torch.Tensor,
+        aspect_input_ids: torch.Tensor,
+        aspect_attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        提取單個 aspect 的階層特徵
+
+        Returns:
+            features: [batch, hidden*3]
+        """
+        # Concatenate text and aspect
+        combined_ids = torch.cat([text_input_ids, aspect_input_ids], dim=1)
+        combined_mask = torch.cat([text_attention_mask, aspect_attention_mask], dim=1)
+
+        # Get BERT outputs
+        outputs = self.bert_absa.bert_embedding.bert(
+            input_ids=combined_ids,
+            attention_mask=combined_mask,
+            return_dict=True
+        )
+
+        all_hidden_states = outputs.hidden_states
+
+        # Extract features from different levels (CLS token)
+        low_feats = torch.stack([
+            all_hidden_states[idx][:, 0, :]
+            for idx in self.low_layers
+        ], dim=0).mean(dim=0)
+
+        mid_feats = torch.stack([
+            all_hidden_states[idx][:, 0, :]
+            for idx in self.mid_layers
+        ], dim=0).mean(dim=0)
+
+        high_feats = torch.stack([
+            all_hidden_states[idx][:, 0, :]
+            for idx in self.high_layers
+        ], dim=0).mean(dim=0)
+
+        # Project and normalize
+        low_proj = self.dropout(F.relu(self.layer_norm_low(self.proj_low(low_feats))))
+        mid_proj = self.dropout(F.relu(self.layer_norm_mid(self.proj_mid(mid_feats))))
+        high_proj = self.dropout(F.relu(self.layer_norm_high(self.proj_high(high_feats))))
+
+        # Concatenate hierarchical features
+        return torch.cat([low_proj, mid_proj, high_proj], dim=-1)  # [batch, hidden*3]
+
+    def forward(
+        self,
+        text_input_ids: torch.Tensor,
+        text_attention_mask: torch.Tensor,
+        aspect_input_ids: torch.Tensor,
+        aspect_attention_mask: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ):
+        """
+        前向傳播 - VP-IARN 統一處理單/多面向
+
+        參數：
+            text_input_ids: [batch, seq_len]
+            text_attention_mask: [batch, seq_len]
+            aspect_input_ids: [batch, max_aspects, aspect_len]
+            aspect_attention_mask: [batch, max_aspects, aspect_len]
+            aspect_mask: [batch, max_aspects] - bool，標記有效 aspects
+
+        返回：
+            logits: [batch, max_aspects, num_classes]
+            extras: dict with attention weights, projection info, gate values
+        """
+        batch_size, max_aspects, aspect_len = aspect_input_ids.shape
+        device = text_input_ids.device
+
+        # Count valid aspects per sample
+        num_valid_aspects = aspect_mask.sum(dim=1)  # [batch]
+
+        # === Step 1: Extract hierarchical features for all aspects ===
+        all_aspect_features = []
+
+        for i in range(max_aspects):
+            aspect_features = self._extract_hierarchical_features(
+                text_input_ids,
+                text_attention_mask,
+                aspect_input_ids[:, i, :],
+                aspect_attention_mask[:, i, :]
+            )
+            all_aspect_features.append(aspect_features)
+
+        # Stack: [batch, max_aspects, hidden*3]
+        aspect_features = torch.stack(all_aspect_features, dim=1)
+
+        # === Step 2: Multi-Aspect Aggregation ===
+        # 聚合所有有效 aspects 的表示，形成句子級多面向密集向量
+        # 使用 aspect_mask 進行 masked mean
+        masked_features = aspect_features * aspect_mask.unsqueeze(-1).float()
+        # 避免除零
+        valid_counts = num_valid_aspects.clamp(min=1).unsqueeze(-1)  # [batch, 1]
+        multi_aspect_dense = masked_features.sum(dim=1) / valid_counts  # [batch, hidden*3]
+
+        # === Step 3: Vector Projection ===
+        # 將聚合向量投影到每個目標 aspect 方向
+        projected_features = []
+
+        for i in range(max_aspects):
+            target_direction = aspect_features[:, i, :]  # [batch, hidden*3]
+            projection = self.vector_projection(multi_aspect_dense, target_direction)
+            projected_features.append(projection)
+
+        projected_features = torch.stack(projected_features, dim=1)  # [batch, max_aspects, hidden*3]
+
+        # === Step 4: Aspect-to-Aspect Attention ===
+        # 對所有樣本計算 attention（向量投影已處理單 aspect 情況）
+        attn_mask = ~aspect_mask  # True for invalid aspects
+        context_features, attn_weights = self.aspect_attention(
+            query=aspect_features,
+            key=aspect_features,
+            value=aspect_features,
+            key_padding_mask=attn_mask,
+            need_weights=True,
+            average_attn_weights=True
+        )
+        # context_features: [batch, max_aspects, hidden*3]
+        # attn_weights: [batch, max_aspects, max_aspects]
+
+        # === Step 5: Relation-aware Gating ===
+        # Gate to balance self features vs context features
+        combined = torch.cat([aspect_features, context_features], dim=-1)
+        gate_values = self.relation_gate(combined)  # [batch, max_aspects, 1]
+
+        # Gated attention output
+        gated_attn_features = gate_values * aspect_features + (1 - gate_values) * context_features
+        # [batch, max_aspects, hidden*3]
+
+        # === Step 6: Adaptive Fusion ===
+        # 根據 aspect 數量動態調整 projection vs attention 的權重
+        alpha = torch.sigmoid(self.adaptive_alpha)  # 可學習的融合係數
+
+        # 多 aspect 樣本：更依賴 attention 特徵
+        # 單 aspect 樣本：更依賴 projection 特徵
+        # 使用 soft 版本：根據 aspect 數量連續調整
+        aspect_ratio = (num_valid_aspects.float() / max_aspects).unsqueeze(-1).unsqueeze(-1)  # [batch, 1, 1]
+
+        # 動態權重：multi-aspect 時 alpha 更高（更多 attention），single-aspect 時 alpha 更低（更多 projection）
+        dynamic_alpha = alpha * aspect_ratio + (1 - alpha) * (1 - aspect_ratio)
+
+        # 融合投影特徵和注意力特徵
+        final_features = dynamic_alpha * gated_attn_features + (1 - dynamic_alpha) * projected_features
+        # [batch, max_aspects, hidden*3]
+
+        # === Step 7: Classification ===
+        logits = self.classifier(final_features)  # [batch, max_aspects, num_classes]
+
+        # Mask out invalid aspects
+        logits = logits.masked_fill(~aspect_mask.unsqueeze(-1), 0.0)
+
+        # Statistics for analysis
+        n_multi = (num_valid_aspects >= 2).sum().item()
+        n_single = (num_valid_aspects == 1).sum().item()
+
+        extras = {
+            'aspect_attention_weights': attn_weights.detach().cpu(),
+            'gate_values': gate_values.squeeze(-1).detach().cpu(),
+            'avg_gate': gate_values[aspect_mask.unsqueeze(-1).expand_as(gate_values)].mean().item() if aspect_mask.any() else 0.0,
+            # VP-IARN specific
+            'adaptive_alpha': alpha.item(),
+            'dynamic_alpha_mean': dynamic_alpha.mean().item(),
+            'n_multi_aspect_samples': n_multi,
+            'n_single_aspect_samples': n_single,
+            'multi_aspect_ratio': n_multi / batch_size if batch_size > 0 else 0.0,
+            'mode': 'vp_iarn'
+        }
+
+        return logits, extras
+
+
 def create_improved_model(
     model_type: str,
-    bert_model_name: str = 'distilbert-base-uncased',
+    bert_model_name: str = 'bert-base-uncased',
     freeze_bert: bool = False,
     hidden_dim: int = 768,
     num_classes: int = 3,
@@ -715,6 +1051,8 @@ def create_improved_model(
         model_type: 模型類型
             - 'hierarchical': Hierarchical BERT (固定拼接)
             - 'hierarchical_layerattn': HBL (Layer-wise Attention)
+            - 'iarn': Inter-Aspect Relation Network
+            - 'vp_iarn': VP-IARN (向量投影增強的 IARN)
         bert_model_name: BERT 模型名稱
         freeze_bert: 是否凍結 BERT
         hidden_dim: 隱藏層維度
@@ -749,6 +1087,14 @@ def create_improved_model(
             num_classes=num_classes,
             dropout=dropout
         )
+    elif model_type == 'vp_iarn':
+        return VP_IARN(
+            bert_model_name=bert_model_name,
+            freeze_bert=freeze_bert,
+            hidden_dim=hidden_dim,
+            num_classes=num_classes,
+            dropout=dropout
+        )
     else:
         raise ValueError(f"Unknown improved model type: {model_type}. "
-                        f"Choose from: 'hierarchical', 'hierarchical_layerattn', 'iarn'")
+                        f"Choose from: 'hierarchical', 'hierarchical_layerattn', 'iarn', 'vp_iarn'")

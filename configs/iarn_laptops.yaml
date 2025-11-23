@@ -1,0 +1,60 @@
+# Method 3: Inter-Aspect Relation Network (IARN) on SemEval Laptops
+# 核心創新：顯式建模多個 aspects 之間的交互關係
+#
+# 與 HPNet 的差異化：
+# - HPNet: 獨立處理每個 aspect (task-specific layer selection)
+# - IARN: 顯式建模 aspect 之間的依賴關係 (inter-aspect dependency)
+#
+# 創新點：
+# 1. Aspect-to-Aspect Attention: 讓每個 aspect 關注其他 aspects
+# 2. Relation-aware Gating: 動態調整自身特徵 vs 上下文特徵
+# 3. Hierarchical Features: 統一的語義階層劃分 (Low/Mid/High)
+#
+# 適用場景：
+# - SemEval Laptops: 混合單/多 aspect 句子
+# - 對比關係: "screen is great but battery is bad"
+# - 因果關係: "keyboard is nice, making typing comfortable"
+
+experiment_name: "iarn_laptops"
+
+# 模型配置
+model:
+  improved: "iarn"  # Inter-Aspect Relation Network
+  bert_model: "bert-base-uncased"
+  freeze_bert: false
+  hidden_dim: 768
+  dropout: 0.3  # 較低 dropout，因為 attention 本身有正則化效果
+  num_attention_heads: 4  # Aspect-to-Aspect Attention 的 head 數量
+
+# 數據配置
+data:
+  use_augmented: true  # SemEval Laptops 使用數據增強
+  min_aspects: 2
+  max_aspects: 8
+  include_single_aspect: true  # SemEval 包含單 aspect 句子
+  virtual_aspect_mode: "overall"  # 單 aspect 使用 virtual aspect
+  max_text_len: 128
+  max_aspect_len: 10
+
+# 訓練配置
+training:
+  batch_size: 32
+  accumulation_steps: 1
+  epochs: 25  # Laptops 不平衡，提早停止 (VP-ACL 策略)
+  lr: 2.0e-5  # 與其他方法保持一致
+  weight_decay: 0.05  # 中等正則化
+  grad_clip: 1.0
+  patience: 8  # 更早 early stop
+  seed: 42
+
+  # 調度器
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 損失函數 - 與其他方法保持一致以便公平對比
+  loss_type: "focal"
+  focal_gamma: 2.5
+  class_weights: [1.0, 5.0, 1.0]  # Neutral 5x (降低避免過度補償)
+
+  # Virtual aspect
+  virtual_weight: 0.5

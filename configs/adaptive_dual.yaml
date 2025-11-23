@@ -1,0 +1,56 @@
+# Adaptive Dual-Architecture Configuration
+# 自動根據數據集特徵選擇最佳模型
+#
+# 選擇邏輯:
+# - 多面向比例 > 50% → IARN (Aspect-to-Aspect Attention)
+# - 多面向比例 ≤ 50% → Hierarchical BERT (階層特徵)
+#
+# 使用方法:
+#   python experiments/train_from_config.py --config configs/adaptive_dual.yaml --dataset mams
+#   python experiments/train_from_config.py --config configs/adaptive_dual.yaml --dataset restaurants
+#   python experiments/train_from_config.py --config configs/adaptive_dual.yaml --dataset laptops
+
+experiment_name: "adaptive_dual"
+
+# 自動選擇模式
+auto_select: true
+
+# 模型配置 (將由 auto_select 覆蓋)
+model:
+  bert_model: "bert-base-uncased"
+  freeze_bert: false
+  hidden_dim: 768
+  # dropout 由 auto_select 根據選擇的模型自動設定:
+  # - hierarchical: 0.4
+  # - iarn: 0.3
+
+# 數據配置
+data:
+  use_augmented: true
+  min_aspects: 2
+  max_aspects: 8
+  include_single_aspect: true
+  virtual_aspect_mode: "overall"
+  max_text_len: 128
+  max_aspect_len: 10
+
+# 訓練配置 (將根據數據集自動調整)
+# MAMS: epochs=40, patience=12, focal_gamma=2.0
+# SemEval: epochs=25, patience=8, focal_gamma=2.5
+training:
+  batch_size: 32
+  accumulation_steps: 1
+  lr: 2.0e-5
+  weight_decay: 0.05
+  grad_clip: 1.0
+  seed: 42
+
+  # 調度器
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 損失函數
+  loss_type: "focal"
+
+  # Virtual aspect
+  virtual_weight: 0.5
