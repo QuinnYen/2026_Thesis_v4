@@ -84,7 +84,11 @@ def config_to_args(config):
                 args.extend(['--iarm_heads', str(model_cfg['iarm_heads'])])
 
             if 'iarm_layers' in model_cfg:
-                args.extend(['--iarm_layers', str(model_cfg['iarm_layers'])])
+                args.extend(['--iarm_layers', str(model_cfg['iarm_layers']])
+
+        # Unified-HIARN 參數
+        if 'multi_aspect_threshold' in model_cfg:
+            args.extend(['--multi_aspect_threshold', str(model_cfg['multi_aspect_threshold'])])
 
     # 數據配置
     if 'data' in config:
@@ -193,9 +197,10 @@ def main():
                         help='YAML 配置文件路徑')
     parser.add_argument('--dataset', type=str, required=True,
                         choices=['restaurants', 'laptops', 'mams',
+                                 'rest16', 'lap16',
                                  'memd_books', 'memd_clothing', 'memd_hotel',
                                  'memd_laptop', 'memd_restaurant'],
-                        help='數據集選擇 (restaurants, laptops, mams, 或 memd_* 系列)')
+                        help='數據集選擇 (restaurants, laptops, mams, rest16, lap16, 或 memd_* 系列)')
     parser.add_argument('--override', nargs='*', default=[],
                         help='覆蓋配置的額外參數，例如: --override --epochs 50 --lr 3e-5')
 

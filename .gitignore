@@ -16,6 +16,5 @@ __pycache__/
 *.so
 
 # Results
-/results/experiments/**/checkpoints/
-/results/baseline/**/checkpoints/
-/results/improved/**/checkpoints/
+/results/baseline
+/results/improved

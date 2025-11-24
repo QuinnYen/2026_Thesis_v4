@@ -30,6 +30,7 @@ import seaborn as sns
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data.semeval_multiaspect import load_multiaspect_data
+from data.semeval2016_multiaspect import load_semeval2016_data
 from data.mams_multiaspect import load_mams_data
 from data.memd_multiaspect import load_memd_data
 from data.multiaspect_dataset import create_multiaspect_dataloaders
@@ -564,6 +565,16 @@ def train_multiaspect_model(args):
         train_xml = 'Laptop_Train_v2.xml'
         test_xml = 'Laptops_Test_Gold.xml'
         default_aug_dir = 'data/augmented_laptops'
+    elif args.dataset == 'rest16':
+        # SemEval-2016 Restaurants
+        train_xml = 'restaurants16_train_sb1.xml'
+        test_xml = 'restaurants16_test_sb1.xml'
+        default_aug_dir = None
+    elif args.dataset == 'lap16':
+        # SemEval-2016 Laptops
+        train_xml = 'Laptops16_train_sb1.xml'
+        test_xml = 'Laptops16_test_sb1.xml'
+        default_aug_dir = None
     elif args.dataset == 'mams':
         # MAMS 已經有分割好的 train/val/test
         train_xml = 'train.xml'
@@ -608,8 +619,21 @@ def train_multiaspect_model(args):
             include_single_aspect=args.include_single_aspect,
             virtual_aspect_mode=args.virtual_aspect_mode
         )
+    elif args.dataset in ['rest16', 'lap16']:
+        # SemEval-2016 數據集處理
+        train_path = project_root / 'data' / 'raw' / 'semeval2016' / train_xml
+        test_path = project_root / 'data' / 'raw' / 'semeval2016' / test_xml
+
+        train_samples, val_samples, test_samples = load_semeval2016_data(
+            train_path=str(train_path),
+            test_path=str(test_path),
+            min_aspects=args.min_aspects,
+            max_aspects=args.max_aspects,
+            include_single_aspect=args.include_single_aspect,
+            virtual_aspect_mode=args.virtual_aspect_mode
+        )
     else:
-        # SemEval 數據集處理
+        # SemEval-2014 數據集處理
         # 數據增強功能已移除（模組已封存）
         use_augmented = getattr(args, 'use_augmented', False)
 
@@ -635,7 +659,7 @@ def train_multiaspect_model(args):
             augmented_neutral_path=augmented_neutral_path
         )
 
-        # 分割驗證集 (SemEval only)
+        # 分割驗證集 (SemEval-2014 only)
         val_size = int(0.1 * len(train_all_samples))
         val_samples = train_all_samples[:val_size]
         train_samples = train_all_samples[val_size:]
@@ -710,6 +734,8 @@ def train_multiaspect_model(args):
         ).to(device)
     else:
         print(f"Creating Model: {args.improved}")
+        # 獲取配置中的閾值參數 (如果有)
+        multi_aspect_threshold = getattr(args, 'multi_aspect_threshold', 0.5)
         model = create_improved_model(
             model_type=args.improved,
             bert_model_name=args.bert_model,
@@ -717,8 +743,17 @@ def train_multiaspect_model(args):
             hidden_dim=args.hidden_dim,
             num_classes=3,
             dropout=args.dropout,
-            use_contrastive=use_contrastive  # 傳遞對比學習設定
+            use_contrastive=use_contrastive,  # 傳遞對比學習設定
+            multi_aspect_threshold=multi_aspect_threshold  # 傳遞閾值
         ).to(device)
+
+        # 如果是 Unified-HIARN，計算多面向比例並設置模式
+        if args.improved == 'unified_hiarn':
+            # 計算訓練集的多面向比例
+            n_multi = sum(1 for s in train_samples if s.num_aspects >= 2)
+            n_total = len(train_samples)
+            multi_aspect_ratio = n_multi / n_total if n_total > 0 else 0.0
+            model.set_mode(multi_aspect_ratio)
 
     print(f"  BERT: {args.bert_model} | Dropout: {args.dropout}")
     if use_contrastive:
@@ -1053,9 +1088,10 @@ def main():
     # 數據參數
     parser.add_argument('--dataset', type=str, required=True,
                         choices=['restaurants', 'laptops', 'mams',
+                                 'rest16', 'lap16',
                                  'memd_books', 'memd_clothing', 'memd_hotel',
                                  'memd_laptop', 'memd_restaurant'],
-                        help='數據集選擇 (restaurants, laptops, mams, 或 memd_* 系列)')
+                        help='數據集選擇 (restaurants, laptops, mams, rest16, lap16, 或 memd_* 系列)')
     parser.add_argument('--use_augmented', action='store_true', default=False,
                         help='使用增強數據集 (EDA Augmentation)')
     parser.add_argument('--augmented_dir', type=str, default=None,
@@ -1081,11 +1117,12 @@ def main():
                         choices=['bert_cls', 'bert_only'],  # bert_only 為向後兼容
                         help='使用 baseline 模型 (bert_cls: 標準BERT-CLS baseline)')
     parser.add_argument('--improved', type=str, default=None,
-                        choices=['hierarchical', 'hierarchical_layerattn', 'iarn', 'vp_iarn', 'hsa'],
+                        choices=['hierarchical', 'hierarchical_layerattn', 'iarn', 'vp_iarn', 'hsa', 'unified_hiarn'],
                         help='使用改進模型:\n'
                              '  - hierarchical: Hierarchical BERT (適合單面向為主)\n'
                              '  - iarn: Inter-Aspect Relation Network (適合多面向為主)\n'
-                             '  - hsa: Hierarchical Syntax Attention (階層式語法注意力)')
+                             '  - hsa: Hierarchical Syntax Attention (階層式語法注意力)\n'
+                             '  - unified_hiarn: Unified-HIARN (動態融合 Hierarchical + IARN)')
     parser.add_argument('--auto_select', action='store_true',
                         help='根據數據集特徵自動選擇最佳模型 (Hierarchical BERT 或 IARN)')
 
@@ -1098,6 +1135,8 @@ def main():
                         help='隱藏層維度（建議保持 768）')
     parser.add_argument('--dropout', type=float, default=0.1,
                         help='Dropout 比率')
+    parser.add_argument('--multi_aspect_threshold', type=float, default=0.5,
+                        help='Unified-HIARN: 多面向比例閾值 (>閾值使用IARN, <=閾值使用Hierarchical)')
 
     # 訓練參數
     parser.add_argument('--batch_size', type=int, default=16,

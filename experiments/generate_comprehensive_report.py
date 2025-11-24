@@ -213,16 +213,20 @@ def generate_text_report(dataset, results):
     if first_valid:
         epochs = first_valid.get('total_epochs', 'N/A')
         patience = first_valid.get('patience', 'N/A')
-        class_weights = first_valid.get('class_weights', 'N/A')
+        class_weights = first_valid.get('class_weights')
         focal_gamma = first_valid.get('focal_gamma', 'N/A')
     else:
-        # 使用預設值 (VP-ACL 策略)
-        if dataset == 'mams':
-            epochs, patience, focal_gamma = 40, 12, 2.0
-            class_weights = [1.0, 3.0, 1.0]
-        else:
-            epochs, patience, focal_gamma = 25, 8, 2.5
-            class_weights = [1.0, 5.0, 1.0]
+        # 使用預設值
+        epochs, patience, focal_gamma = 30, 10, 2.0
+        class_weights = None
+
+    # 格式化 class_weights 顯示
+    if class_weights is None or class_weights == 'auto':
+        class_weights_str = "auto (動態計算)"
+    elif isinstance(class_weights, list):
+        class_weights_str = f"[{', '.join(f'{w:.1f}' for w in class_weights)}]"
+    else:
+        class_weights_str = str(class_weights)
 
     report.append(f"  Epochs:        {epochs}")
     report.append(f"  Patience:      {patience}")
@@ -232,13 +236,8 @@ def generate_text_report(dataset, results):
     report.append("  Scheduler:     Cosine Annealing with Warmup (10%)")
     report.append("  Loss Type:     Focal Loss")
     report.append(f"  Focal Gamma:   {focal_gamma}")
-    report.append(f"  Class Weights: {class_weights}")
-    if dataset == 'mams':
-        report.append("  Dropout:       0.3-0.45")
-        report.append("  說明:          MAMS 相對平衡，可充分訓練 (VP-ACL 策略)")
-    else:
-        report.append("  Dropout:       0.3-0.4")
-        report.append("  說明:          Restaurants 不平衡，提早停止 (VP-ACL 策略)")
+    report.append(f"  Class Weights: {class_weights_str}")
+    report.append("  Dropout:       0.3-0.4 (各模型略有不同)")
     report.append("")
 
     # 實驗結果表格 (論文標準格式：只顯示 Acc 和 Macro-F1)
@@ -359,7 +358,7 @@ def generate_text_report(dataset, results):
 def main():
     parser = argparse.ArgumentParser(description='生成綜合實驗報告')
     parser.add_argument('--dataset', type=str, required=True,
-                        choices=['restaurants', 'laptops', 'mams'],
+                        choices=['restaurants', 'laptops', 'mams', 'rest16', 'lap16'],
                         help='數據集選擇')
     args = parser.parse_args()
 
