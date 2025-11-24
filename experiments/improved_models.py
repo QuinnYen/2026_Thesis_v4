@@ -29,6 +29,7 @@ import torch.nn.functional as F
 
 from models.bert_embedding import BERTForABSA
 from models.base_model import BaseModel
+from models.hierarchical_syntax import HierarchicalSyntaxAttention, create_hsa_model
 
 
 class HierarchicalBERT(BaseModel):
@@ -47,6 +48,7 @@ class HierarchicalBERT(BaseModel):
         - 利用BERT不同層的階層特性
         - 固定concatenation組合三個層級
         - 簡單、有效、可解釋
+        - 支持 Supervised Contrastive Learning（可選）
 
     與 Baseline 對比:
         - Baseline (BERT-CLS): 只用最後一層的 [CLS] token
@@ -63,12 +65,14 @@ class HierarchicalBERT(BaseModel):
         freeze_bert: bool = False,
         hidden_dim: int = 768,
         num_classes: int = 3,
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        use_contrastive: bool = False  # 是否啟用對比學習
     ):
         super(HierarchicalBERT, self).__init__()
 
         self.hidden_dim = hidden_dim
         self.num_classes = num_classes
+        self.use_contrastive = use_contrastive
 
         # BERT with hierarchical output
         self.bert_absa = BERTForABSA(
@@ -83,21 +87,11 @@ class HierarchicalBERT(BaseModel):
         bert_hidden_size = self.bert_absa.hidden_size
 
         # Hierarchical fusion layers
-        # DistilBERT has 6 layers, BERT has 12 layers
-        is_distilbert = 'distilbert' in bert_model_name.lower()
-
-        if is_distilbert:
-            # DistilBERT: 6 layers
-            # Low: 1-2, Mid: 3-4, High: 5-6
-            self.low_layers = [1, 2]
-            self.mid_layers = [3, 4]
-            self.high_layers = [5, 6]
-        else:
-            # BERT/RoBERTa: 12 layers
-            # Low: 1-4, Mid: 5-8, High: 9-12
-            self.low_layers = [1, 2, 3, 4]
-            self.mid_layers = [5, 6, 7, 8]
-            self.high_layers = [9, 10, 11, 12]
+        # BERT/DeBERTa: 12 layers
+        # Low: 1-4, Mid: 5-8, High: 9-12
+        self.low_layers = [1, 2, 3, 4]
+        self.mid_layers = [5, 6, 7, 8]
+        self.high_layers = [9, 10, 11, 12]
 
         # Fusion layers for each level
         self.low_fusion = nn.Sequential(
@@ -130,49 +124,55 @@ class HierarchicalBERT(BaseModel):
             nn.Linear(hidden_dim, num_classes)
         )
 
+        # Projection head for contrastive learning (optional)
+        # 將 hidden_dim*3 投影到較小的空間，更適合對比學習
+        if use_contrastive:
+            self.projection_head = nn.Sequential(
+                nn.Linear(hidden_dim * 3, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+
     def forward(
         self,
-        text_input_ids: torch.Tensor,
-        text_attention_mask: torch.Tensor,
-        aspect_input_ids: torch.Tensor,
-        aspect_attention_mask: torch.Tensor,
+        pair_input_ids: torch.Tensor,
+        pair_attention_mask: torch.Tensor,
+        pair_token_type_ids: torch.Tensor,
         aspect_mask: torch.Tensor
     ):
         """
         前向傳播
 
+        使用正確的 BERT sentence-pair 格式：
+            [CLS] text [SEP] aspect [SEP]
+            token_type_ids: 0...0 1...1
+
         參數:
-            text_input_ids: [batch, seq_len]
-            text_attention_mask: [batch, seq_len]
-            aspect_input_ids: [batch, max_aspects, aspect_len]
-            aspect_attention_mask: [batch, max_aspects, aspect_len]
+            pair_input_ids: [batch, max_aspects, seq_len] - 已編碼的 text-aspect pairs
+            pair_attention_mask: [batch, max_aspects, seq_len]
+            pair_token_type_ids: [batch, max_aspects, seq_len] - 區分 text(0) 和 aspect(1)
             aspect_mask: [batch, max_aspects] - bool，標記有效 aspects
 
         返回:
             logits: [batch, max_aspects, num_classes]
             None: (無額外資訊)
         """
-        batch_size, max_aspects, aspect_len = aspect_input_ids.shape
+        batch_size, max_aspects, seq_len = pair_input_ids.shape
 
         logits_list = []
+        features_list = []  # 收集特徵表示（用於對比學習）
 
         for i in range(max_aspects):
             if aspect_mask[:, i].any():
-                # Concatenate text and aspect: [CLS] text [SEP] aspect [SEP]
-                combined_ids = torch.cat([
-                    text_input_ids,
-                    aspect_input_ids[:, i, :]
-                ], dim=1)
+                # 獲取第 i 個 aspect 的 sentence-pair 編碼
+                input_ids = pair_input_ids[:, i, :]        # [batch, seq_len]
+                attention_mask = pair_attention_mask[:, i, :]  # [batch, seq_len]
+                token_type_ids = pair_token_type_ids[:, i, :]  # [batch, seq_len]
 
-                combined_mask = torch.cat([
-                    text_attention_mask,
-                    aspect_attention_mask[:, i, :]
-                ], dim=1)
-
-                # Get hierarchical features from BERT
+                # Get hierarchical features from BERT (不使用 token_type_ids)
                 outputs = self.bert_absa.bert_embedding.bert(
-                    input_ids=combined_ids,
-                    attention_mask=combined_mask,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
                     return_dict=True
                 )
 
@@ -206,14 +206,31 @@ class HierarchicalBERT(BaseModel):
                 # Classification
                 logit = self.classifier(hierarchical_repr)  # [batch, num_classes]
                 logits_list.append(logit)
+
+                # 收集特徵表示（用於對比學習）
+                if self.use_contrastive:
+                    # 使用 projection head 投影特徵
+                    projected_repr = self.projection_head(hierarchical_repr)  # [batch, hidden_dim]
+                    features_list.append(projected_repr)
+                else:
+                    features_list.append(hierarchical_repr)  # [batch, hidden*3]
             else:
                 logits_list.append(
-                    torch.zeros(batch_size, self.num_classes, device=text_input_ids.device)
+                    torch.zeros(batch_size, self.num_classes, device=pair_input_ids.device)
+                )
+                # 對於無效 aspect，填充零向量
+                feature_dim = self.hidden_dim if self.use_contrastive else self.hidden_dim * 3
+                features_list.append(
+                    torch.zeros(batch_size, feature_dim, device=pair_input_ids.device)
                 )
 
         logits = torch.stack(logits_list, dim=1)  # [batch, max_aspects, num_classes]
+        features = torch.stack(features_list, dim=1)  # [batch, max_aspects, feature_dim]
 
-        return logits, None  # None: 無額外資訊
+        # extras 包含特徵表示（用於對比學習）
+        extras = {'features': features}
+
+        return logits, extras
 
 
 class HierarchicalBERT_LayerAttn(BaseModel):
@@ -525,18 +542,10 @@ class InterAspectRelationNetwork(BaseModel):
         bert_hidden_size = self.bert_absa.hidden_size
 
         # Hierarchical fusion layers (same as HierarchicalBERT)
-        is_distilbert = 'distilbert' in bert_model_name.lower()
-
-        if is_distilbert:
-            # DistilBERT: 6 layers
-            self.low_layers = [1, 2]
-            self.mid_layers = [3, 4]
-            self.high_layers = [5, 6]
-        else:
-            # BERT/RoBERTa: 12 layers
-            self.low_layers = [1, 2, 3, 4]
-            self.mid_layers = [5, 6, 7, 8]
-            self.high_layers = [9, 10, 11, 12]
+        # BERT/DeBERTa: 12 layers
+        self.low_layers = [1, 2, 3, 4]
+        self.mid_layers = [5, 6, 7, 8]
+        self.high_layers = [9, 10, 11, 12]
 
         # === 1. Hierarchical Feature Projections ===
         self.proj_low = nn.Linear(bert_hidden_size, hidden_dim)
@@ -579,47 +588,43 @@ class InterAspectRelationNetwork(BaseModel):
 
     def forward(
         self,
-        text_input_ids: torch.Tensor,
-        text_attention_mask: torch.Tensor,
-        aspect_input_ids: torch.Tensor,
-        aspect_attention_mask: torch.Tensor,
+        pair_input_ids: torch.Tensor,
+        pair_attention_mask: torch.Tensor,
+        pair_token_type_ids: torch.Tensor,
         aspect_mask: torch.Tensor
     ):
         """
         前向傳播
 
+        使用正確的 BERT sentence-pair 格式：
+            [CLS] text [SEP] aspect [SEP]
+            token_type_ids: 0...0 1...1
+
         參數：
-            text_input_ids: [batch, seq_len]
-            text_attention_mask: [batch, seq_len]
-            aspect_input_ids: [batch, max_aspects, aspect_len]
-            aspect_attention_mask: [batch, max_aspects, aspect_len]
+            pair_input_ids: [batch, max_aspects, seq_len] - 已編碼的 text-aspect pairs
+            pair_attention_mask: [batch, max_aspects, seq_len]
+            pair_token_type_ids: [batch, max_aspects, seq_len] - 區分 text(0) 和 aspect(1)
             aspect_mask: [batch, max_aspects] - bool，標記有效 aspects
 
         返回：
             logits: [batch, max_aspects, num_classes]
             extras: dict with attention weights and gate values
         """
-        batch_size, max_aspects, aspect_len = aspect_input_ids.shape
+        batch_size, max_aspects, seq_len = pair_input_ids.shape
 
         # === Step 1: Extract hierarchical features for all aspects ===
         all_self_features = []  # Will store [batch, max_aspects, hidden*3]
 
         for i in range(max_aspects):
-            # Concatenate text and aspect
-            combined_ids = torch.cat([
-                text_input_ids,
-                aspect_input_ids[:, i, :]
-            ], dim=1)
+            # 獲取第 i 個 aspect 的 sentence-pair 編碼
+            input_ids = pair_input_ids[:, i, :]        # [batch, seq_len]
+            attention_mask = pair_attention_mask[:, i, :]  # [batch, seq_len]
+            token_type_ids = pair_token_type_ids[:, i, :]  # [batch, seq_len]
 
-            combined_mask = torch.cat([
-                text_attention_mask,
-                aspect_attention_mask[:, i, :]
-            ], dim=1)
-
-            # Get BERT outputs
+            # Get BERT outputs (不使用 token_type_ids，ABSA 任務中使用會降低效果)
             outputs = self.bert_absa.bert_embedding.bert(
-                input_ids=combined_ids,
-                attention_mask=combined_mask,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
                 return_dict=True
             )
 
@@ -801,17 +806,10 @@ class VP_IARN(BaseModel):
 
         bert_hidden_size = self.bert_absa.hidden_size
 
-        # Hierarchical layer indices
-        is_distilbert = 'distilbert' in bert_model_name.lower()
-
-        if is_distilbert:
-            self.low_layers = [1, 2]
-            self.mid_layers = [3, 4]
-            self.high_layers = [5, 6]
-        else:
-            self.low_layers = [1, 2, 3, 4]
-            self.mid_layers = [5, 6, 7, 8]
-            self.high_layers = [9, 10, 11, 12]
+        # Hierarchical layer indices (BERT/DeBERTa: 12 layers)
+        self.low_layers = [1, 2, 3, 4]
+        self.mid_layers = [5, 6, 7, 8]
+        self.high_layers = [9, 10, 11, 12]
 
         # === 1. Hierarchical Feature Projections ===
         self.proj_low = nn.Linear(bert_hidden_size, hidden_dim)
@@ -1053,23 +1051,29 @@ def create_improved_model(
             - 'hierarchical_layerattn': HBL (Layer-wise Attention)
             - 'iarn': Inter-Aspect Relation Network
             - 'vp_iarn': VP-IARN (向量投影增強的 IARN)
+            - 'hsa': Hierarchical Syntax Attention (階層式語法注意力)
         bert_model_name: BERT 模型名稱
         freeze_bert: 是否凍結 BERT
         hidden_dim: 隱藏層維度
         num_classes: 類別數量
         dropout: Dropout 比率
         **kwargs: 其他參數
+            - num_syntax_layers: HSA 語法層數 (default: 2)
+            - use_contrastive: 是否啟用對比學習 (default: False)
 
     Returns:
         改進模型實例
     """
+    use_contrastive = kwargs.get('use_contrastive', False)
+
     if model_type == 'hierarchical':
         return HierarchicalBERT(
             bert_model_name=bert_model_name,
             freeze_bert=freeze_bert,
             hidden_dim=hidden_dim,
             num_classes=num_classes,
-            dropout=dropout
+            dropout=dropout,
+            use_contrastive=use_contrastive
         )
     elif model_type == 'hierarchical_layerattn':
         return HierarchicalBERT_LayerAttn(
@@ -1095,6 +1099,15 @@ def create_improved_model(
             num_classes=num_classes,
             dropout=dropout
         )
+    elif model_type == 'hsa':
+        return create_hsa_model(
+            bert_model_name=bert_model_name,
+            freeze_bert=freeze_bert,
+            hidden_dim=hidden_dim,
+            num_classes=num_classes,
+            dropout=dropout,
+            num_syntax_layers=kwargs.get('num_syntax_layers', 2)
+        )
     else:
         raise ValueError(f"Unknown improved model type: {model_type}. "
-                        f"Choose from: 'hierarchical', 'hierarchical_layerattn', 'iarn', 'vp_iarn'")
+                        f"Choose from: 'hierarchical', 'hierarchical_layerattn', 'iarn', 'vp_iarn', 'hsa'")

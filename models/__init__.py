@@ -4,11 +4,10 @@
 包含當前架構使用的核心模組:
 - BaseModel: 基礎模型類
 - BERTForABSA: BERT 編碼器
-- AAHAEnhanced: Aspect-Aware Hierarchical Attention (保留供參考)
+- HierarchicalSyntaxAttention: HSA 模型 (Method 3)
 """
 
 from .base_model import BaseModel, EmbeddingLayer, AttentionPooling, MLP
-from .aaha_enhanced import AAHAEnhanced
 
 # BERT 支援（需要 transformers 庫）
 try:
@@ -20,14 +19,25 @@ except ImportError:
     HybridEmbedding = None
     BERTForABSA = None
 
+# HSA 模型
+try:
+    from .hierarchical_syntax import HierarchicalSyntaxAttention, create_hsa_model
+    HSA_AVAILABLE = True
+except ImportError:
+    HSA_AVAILABLE = False
+    HierarchicalSyntaxAttention = None
+    create_hsa_model = None
+
 __all__ = [
     'BaseModel',
     'EmbeddingLayer',
     'AttentionPooling',
     'MLP',
-    'AAHAEnhanced',
     'BERTEmbedding',
     'HybridEmbedding',
     'BERTForABSA',
-    'BERT_AVAILABLE'
+    'BERT_AVAILABLE',
+    'HierarchicalSyntaxAttention',
+    'create_hsa_model',
+    'HSA_AVAILABLE'
 ]

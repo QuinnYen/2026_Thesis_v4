@@ -1,13 +1,18 @@
 """
 BERT 嵌入層
 提供動態 BERT 嵌入，替代靜態 GloVe
-支持 BERT 和 DistilBERT
+支持 BERT 和 DeBERTa
 """
 
 import torch
 import torch.nn as nn
 from typing import Tuple, Optional
-from transformers import BertModel, BertTokenizer, DistilBertModel, DistilBertTokenizer, AutoModel, AutoTokenizer
+from transformers import (
+    BertModel, BertTokenizer,
+    DebertaModel, DebertaTokenizer,
+    DebertaV2Model, DebertaV2Tokenizer,
+    AutoModel, AutoTokenizer
+)
 
 
 class BERTEmbedding(nn.Module):
@@ -15,10 +20,14 @@ class BERTEmbedding(nn.Module):
     BERT 嵌入層
 
     功能:
-        - 使用預訓練 BERT 模型
+        - 使用預訓練 BERT/DeBERTa 模型
         - 支援微調或凍結
         - 動態上下文嵌入
         - 比靜態 GloVe 效果更好
+
+    支援的模型:
+        - BERT: bert-base-uncased, bert-large-uncased
+        - DeBERTa: microsoft/deberta-base, microsoft/deberta-v3-base
     """
 
     def __init__(
@@ -32,8 +41,8 @@ class BERTEmbedding(nn.Module):
         初始化 BERT 嵌入層
 
         參數:
-            model_name: BERT 模型名稱
-            freeze: 是否凍結 BERT 參數
+            model_name: 模型名稱 (bert-base-uncased, microsoft/deberta-base, etc.)
+            freeze: 是否凍結參數
             pooling: 池化方式 ('mean', 'max', 'cls')
             output_hidden_states: 是否輸出所有層的hidden states（用於階層模型）
         """
@@ -44,14 +53,20 @@ class BERTEmbedding(nn.Module):
         self.output_hidden_states = output_hidden_states
 
         # 檢測模型類型
-        self.is_distilbert = 'distilbert' in model_name.lower()
+        model_name_lower = model_name.lower()
+        self.is_deberta = 'deberta' in model_name_lower
+        self.is_deberta_v2 = 'deberta-v2' in model_name_lower or 'deberta-v3' in model_name_lower
 
-        # 載入模型和分詞器（使用 AutoModel 自動識別）
+        # 載入模型和分詞器
         print(f"載入模型: {model_name}")
-        if self.is_distilbert:
-            self.bert = DistilBertModel.from_pretrained(model_name)
-            self.tokenizer = DistilBertTokenizer.from_pretrained(model_name)
-            print("  類型: DistilBERT (輕量級)")
+        if self.is_deberta_v2:
+            self.bert = DebertaV2Model.from_pretrained(model_name)
+            self.tokenizer = DebertaV2Tokenizer.from_pretrained(model_name)
+            print("  類型: DeBERTa-v2/v3 (增強版)")
+        elif self.is_deberta:
+            self.bert = DebertaModel.from_pretrained(model_name)
+            self.tokenizer = DebertaTokenizer.from_pretrained(model_name)
+            print("  類型: DeBERTa (解耦注意力)")
         else:
             self.bert = BertModel.from_pretrained(model_name)
             self.tokenizer = BertTokenizer.from_pretrained(model_name)
@@ -68,13 +83,9 @@ class BERTEmbedding(nn.Module):
 
         # 凍結參數策略
         if freeze:
-            # 獲取總層數
-            if self.is_distilbert:
-                num_layers = self.bert.config.n_layers  # DistilBERT 有 6 層
-                last_layers = 2  # 訓練最後 2 層
-            else:
-                num_layers = self.bert.config.num_hidden_layers  # BERT 有 12 層
-                last_layers = 2  # 訓練最後 2 層
+            # 獲取總層數（BERT 和 DeBERTa 都有 12 層）
+            num_layers = self.bert.config.num_hidden_layers
+            last_layers = 2  # 訓練最後 2 層
 
             # 凍結除了最後幾層的所有層
             for name, param in self.bert.named_parameters():
@@ -82,12 +93,13 @@ class BERTEmbedding(nn.Module):
 
                 # 訓練最後幾層
                 for layer_idx in range(num_layers - last_layers, num_layers):
-                    if f"layer.{layer_idx}" in name or f"transformer.layer.{layer_idx}" in name:
+                    if f"layer.{layer_idx}" in name:
                         param.requires_grad = True
 
-                # BERT 的 pooler（DistilBERT 沒有）
-                if not self.is_distilbert and "pooler" in name:
-                    param.requires_grad = True
+                # BERT 的 pooler（DeBERTa 沒有）
+                if not self.is_deberta and not self.is_deberta_v2:
+                    if "pooler" in name:
+                        param.requires_grad = True
 
             # 計算可訓練參數數量
             trainable_params = sum(p.numel() for p in self.bert.parameters() if p.requires_grad)
@@ -101,7 +113,8 @@ class BERTEmbedding(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         前向傳播
@@ -109,11 +122,13 @@ class BERTEmbedding(nn.Module):
         參數:
             input_ids: 輸入 token IDs [batch, seq_len]
             attention_mask: 注意力掩碼 [batch, seq_len]
+            token_type_ids: Token type IDs [batch, seq_len] (用於區分 text 和 aspect)
 
         返回:
             BERT 嵌入 [batch, seq_len, hidden_size]
         """
-        # BERT 編碼
+        # BERT 編碼 - 不使用 token_type_ids (ABSA 任務中不使用效果更好)
+        # 研究表明：在 ABSA 中，aspect 不是獨立句子，使用 token_type_ids 反而降低效果
         outputs = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask,

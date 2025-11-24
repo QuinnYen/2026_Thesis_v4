@@ -161,8 +161,13 @@ def config_to_args(config):
             args.extend(['--label_smoothing', str(train_cfg['label_smoothing'])])
 
         if 'class_weights' in train_cfg:
-            weights = [str(w) for w in train_cfg['class_weights']]
-            args.extend(['--class_weights'] + weights)
+            cw = train_cfg['class_weights']
+            if cw == 'auto':
+                # 動態計算 class weights
+                args.append('--auto_class_weights')
+            elif isinstance(cw, list):
+                weights = [str(w) for w in cw]
+                args.extend(['--class_weights'] + weights)
 
         # Virtual aspect
         if 'virtual_weight' in train_cfg:
@@ -171,6 +176,13 @@ def config_to_args(config):
         # 隨機種子
         if 'seed' in train_cfg:
             args.extend(['--seed', str(train_cfg['seed'])])
+
+        # 對比學習參數
+        if 'contrastive_weight' in train_cfg:
+            args.extend(['--contrastive_weight', str(train_cfg['contrastive_weight'])])
+
+        if 'contrastive_temperature' in train_cfg:
+            args.extend(['--contrastive_temperature', str(train_cfg['contrastive_temperature'])])
 
     return args
 

@@ -2,7 +2,7 @@
 Multi-Aspect ABSA 實驗報告 - MAMS Dataset
 ================================================================================
 
-生成時間: 2025-11-23 03:17:58
+生成時間: 2025-11-24 01:32:42
 
 --------------------------------------------------------------------------------
 模型架構
@@ -13,21 +13,17 @@ Multi-Aspect ABSA 實驗報告 - MAMS Dataset
 
   Method 1:  Hierarchical BERT (階層式BERT)
              從 BERT 不同層提取 Low/Mid/High 層級特徵
-             固定 concatenation 組合
+             適用於單面向為主的數據集 (如 Restaurants, Laptops)
 
-  Method 2:  HBL (Hierarchical BERT + Layer-wise Attention)
-             基於 UDify (Kondratyuk & Straka, EMNLP 2019)
-             動態學習層級權重，替代固定拼接
-
-  Method 3:  IARN (Inter-Aspect Relation Network)
+  Method 2:  IARN (Inter-Aspect Relation Network)
              顯式建模多個 aspects 之間的交互關係
              Aspect-to-Aspect Attention + Relation-aware Gating
-             適用於 100% 多面向數據集 (如 MAMS)
+             適用於多面向數據集 (如 MAMS)
 
-  Method 4:  VP-IARN (Vector Projection enhanced IARN) [主要貢獻]
-             結合向量投影與 Aspect-to-Aspect Attention
-             統一處理單/多面向場景
-             基於 VP-ACL (2025) 思想，加入自適應融合機制
+  Method 3:  HSA (Hierarchical Syntax Attention)
+             階層式語法注意力網絡
+             在語法結構上進行階層式傳播 (Token → Phrase → Clause)
+             結合「階層式」概念與語法結構信息
 
 --------------------------------------------------------------------------------
 實驗配置
@@ -49,11 +45,10 @@ Multi-Aspect ABSA 實驗報告 - MAMS Dataset
 --------------------------------------------------------------------------------
 Model                             Acc (%)   Macro-F1 (%)   Best/Total Epoch
 --------------------------------------------------------------------------------
-Baseline (BERT-CLS)                 82.95          82.31                 12
-Method 1 (Hierarchical)             83.10          82.50                 15
-Method 2 (HBL)                        N/A            N/A                N/A
-Method 3 (IARN)                     84.90          84.36                 14
-Method 4 (VP-IARN)                  84.15          83.48                 11
+Baseline (BERT-CLS)                 83.40          83.05                 11
+Method 1 (Hierarchical)             83.77          83.29                 22
+Method 2 (IARN)                     85.12          84.56                 16
+Method 3 (HSA)                      83.25          82.74                 11
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
@@ -61,38 +56,35 @@ Per-class F1 Analysis (for error analysis)
 --------------------------------------------------------------------------------
 Model                                Neg F1       Neu F1       Pos F1
 --------------------------------------------------------------------------------
-Baseline (BERT-CLS)                   79.09        85.27        82.56
-Method 1 (Hierarchical)               79.82        85.55        82.13
-Method 3 (IARN)                       82.23        87.02        83.83
-Method 4 (VP-IARN)                    80.65        86.84        82.94
+Baseline (BERT-CLS)                   81.61        85.06        82.48
+Method 1 (Hierarchical)               81.02        85.69        83.14
+Method 2 (IARN)                       81.94        87.41        84.33
+Method 3 (HSA)                        80.24        85.18        82.81
 
 --------------------------------------------------------------------------------
 性能分析
 --------------------------------------------------------------------------------
 
 [Baseline] BERT-CLS:
-  Accuracy:  82.95%
-  Macro-F1:  82.31%
-  Best Epoch:    12 / None
+  Accuracy:  83.40%
+  Macro-F1:  83.05%
+  Best Epoch:    11 / None
 
-[Best Model] Method 3 (IARN)
-  Macro-F1:  84.36%
-  Accuracy:  84.90%
-  Best Epoch:    14 / None
+[Best Model] Method 2 (IARN)
+  Macro-F1:  84.56%
+  Accuracy:  85.12%
+  Best Epoch:    16 / None
 
 [Improvement] 相對 Baseline 改進:
-  Macro-F1 提升: +2.05% (+2.49% relative)
-
-[VP-IARN Info] 向量投影增強的IARN:
-  Macro-F1:  83.48%
+  Macro-F1 提升: +1.51% (+1.82% relative)
 
 --------------------------------------------------------------------------------
 實驗目錄
 --------------------------------------------------------------------------------
-  Baseline (BERT-CLS)       20251123_003558_baseline_bert_cls_drop0.45_bs32x1_focal
-  Method 1 (Hierarchical)   20251123_011429_improved_hierarchical_drop0.4_bs32x1_focal
-  Method 3 (IARN)           20251123_015807_improved_iarn_drop0.3_bs32x1_focal
-  Method 4 (VP-IARN)        20251123_024031_improved_vp_iarn_drop0.35_bs32x1_focal
+  Baseline (BERT-CLS)       20251124_000116_baseline_bert_cls_drop0.3_bs32x1_focal
+  Method 1 (Hierarchical)   20251124_001937_improved_hierarchical_drop0.4_bs32x1_focal
+  Method 2 (IARN)           20251124_004632_improved_iarn_drop0.3_bs32x1_focal
+  Method 3 (HSA)            20251124_011007_improved_hsa_drop0.3_bs32x1_focal
 
 --------------------------------------------------------------------------------
 結論
@@ -104,18 +96,13 @@ Method 4 (VP-IARN)                    80.65        86.84        82.94
    - Hierarchical BERT 透過提取 BERT 不同層的特徵，捕捉了詞法、語義、任務三個層級的資訊
    - 相較於只使用 [CLS] token 的 baseline，階層特徵提供了更豐富的表示
 
-2. Layer-wise Attention 的優勢
-   - HBL 透過可學習的權重動態組合層級特徵，避免了固定拼接的侷限
-   - 權重分布可提供模型決策的可解釋性
-
-3. 多面向場景的挑戰
-   - MAMS 數據集 100% 為多面向句子，是真正的多面向場景
+2. 場景自適應策略
+   - MAMS 數據集 100% 為多面向句子
    - IARN 的 Aspect-to-Aspect Attention 在此場景優勢明顯
+   - 推薦方法: IARN
 
-4. VP-IARN 的創新貢獻
-   - 結合 VP-ACL (2025) 的向量投影思想
-   - 與 VP-ACL 差異: 加入 Aspect-to-Aspect Attention + 自適應融合
-   - 與 IARN 差異: 向量投影為單面向提供有效表示
-   - 統一框架: 一個模型處理所有場景，無需針對數據集調整
+3. 模型選擇指南
+   - 多面向比例 > 50%: 使用 IARN (Aspect-to-Aspect Attention)
+   - 多面向比例 <= 50%: 使用 HSA 或 Hierarchical BERT (階層特徵)
 
 ================================================================================

@@ -2,7 +2,7 @@
 批次執行實驗腳本
 
 使用方法:
-    # 標準模式: 執行所有方法 (Baseline + Hierarchical + IARN)
+    # 標準模式: 執行所有方法 (Baseline + Hierarchical + IARN + HSA)
     python run_experiments.py --dataset mams
     python run_experiments.py --dataset restaurants
     python run_experiments.py --dataset laptops
@@ -14,9 +14,10 @@
 
 執行順序 (標準模式):
     1. Baseline: BERT-CLS
-    2. Method 1: Hierarchical BERT
-    3. Method 2: IARN
-    4. 生成綜合報告
+    2. Method 1: Hierarchical BERT (BERT 層級特徵)
+    3. Method 2: IARN (Aspect 間交互)
+    4. Method 3: HSA - Hierarchical Syntax Attention (階層式語法注意力)
+    5. 生成綜合報告
 
 自動模式選擇邏輯:
     - 多面向比例 > 50% → IARN
@@ -120,25 +121,13 @@ def main():
     success_count = 0
     total_count = 0
 
-    # 根據數據集選擇對應的配置文件
-    if args.dataset == 'mams':
-        experiments = [
-            (configs_dir / "baseline_bert_cls_mams.yaml", "Baseline: BERT-CLS"),
-            (configs_dir / "hierarchical_bert_mams.yaml", "Method 1: Hierarchical BERT"),
-            (configs_dir / "iarn_mams.yaml", "Method 2: IARN"),
-        ]
-    elif args.dataset == 'laptops':
-        experiments = [
-            (configs_dir / "baseline_bert_cls_laptops.yaml", "Baseline: BERT-CLS"),
-            (configs_dir / "hierarchical_bert_laptops.yaml", "Method 1: Hierarchical BERT"),
-            (configs_dir / "iarn_laptops.yaml", "Method 2: IARN"),
-        ]
-    else:  # restaurants
-        experiments = [
-            (configs_dir / "baseline_bert_cls.yaml", "Baseline: BERT-CLS"),
-            (configs_dir / "hierarchical_bert.yaml", "Method 1: Hierarchical BERT"),
-            (configs_dir / "iarn_restaurants.yaml", "Method 2: IARN"),
-        ]
+    # 使用統一配置文件（所有數據集共用）
+    experiments = [
+        (configs_dir / "unified_baseline.yaml", "Baseline: BERT-CLS"),
+        (configs_dir / "unified_hierarchical.yaml", "Method 1: Hierarchical BERT"),
+        (configs_dir / "unified_iarn.yaml", "Method 2: IARN"),
+        (configs_dir / "unified_hsa.yaml", "Method 3: HSA"),
+    ]
 
     print(f"\n[Batch] {len(experiments)} experiments on {args.dataset.upper()}\n")
 

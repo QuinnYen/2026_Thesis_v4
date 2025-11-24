@@ -76,52 +76,44 @@ class BERT_CLS_Baseline(BaseModel):
 
     def forward(
         self,
-        text_input_ids: torch.Tensor,
-        text_attention_mask: torch.Tensor,
-        aspect_input_ids: torch.Tensor,
-        aspect_attention_mask: torch.Tensor,
+        pair_input_ids: torch.Tensor,
+        pair_attention_mask: torch.Tensor,
+        pair_token_type_ids: torch.Tensor,
         aspect_mask: torch.Tensor
     ):
         """
         前向傳播
 
+        使用正確的 BERT sentence-pair 格式：
+            [CLS] text [SEP] aspect [SEP]
+            token_type_ids: 0...0 1...1
+
         參數:
-            text_input_ids: [batch, seq_len]
-            text_attention_mask: [batch, seq_len]
-            aspect_input_ids: [batch, max_aspects, aspect_len]
-            aspect_attention_mask: [batch, max_aspects, aspect_len]
+            pair_input_ids: [batch, max_aspects, seq_len] - 已編碼的 text-aspect pairs
+            pair_attention_mask: [batch, max_aspects, seq_len]
+            pair_token_type_ids: [batch, max_aspects, seq_len] - 區分 text(0) 和 aspect(1)
             aspect_mask: [batch, max_aspects] - bool，標記有效 aspects
 
         返回:
             logits: [batch, max_aspects, num_classes]
         """
-        batch_size, max_aspects, aspect_len = aspect_input_ids.shape
-        seq_len = text_input_ids.shape[1]
+        batch_size, max_aspects, seq_len = pair_input_ids.shape
 
         logits_list = []
 
         for i in range(max_aspects):
             # 只處理有效的 aspects
             if aspect_mask[:, i].any():
-                # 拼接 text 和 aspect: [CLS] text [SEP] aspect [SEP]
-                # text_input_ids: [batch, seq_len]
-                # aspect_input_ids[:, i, :]: [batch, aspect_len]
+                # 獲取第 i 個 aspect 的 sentence-pair 編碼
+                input_ids = pair_input_ids[:, i, :]        # [batch, seq_len]
+                attention_mask = pair_attention_mask[:, i, :]  # [batch, seq_len]
+                token_type_ids = pair_token_type_ids[:, i, :]  # [batch, seq_len]
 
-                combined_ids = torch.cat([
-                    text_input_ids,
-                    aspect_input_ids[:, i, :]
-                ], dim=1)  # [batch, seq_len + aspect_len]
-
-                combined_mask = torch.cat([
-                    text_attention_mask,
-                    aspect_attention_mask[:, i, :]
-                ], dim=1)  # [batch, seq_len + aspect_len]
-
-                # BERT encoding
+                # BERT encoding (不使用 token_type_ids)
                 embeddings = self.bert.bert_embedding(
-                    combined_ids,
-                    attention_mask=combined_mask
-                )  # [batch, seq_len + aspect_len, hidden_size]
+                    input_ids,
+                    attention_mask=attention_mask
+                )  # [batch, seq_len, hidden_size]
 
                 # 使用 [CLS] token (第一個 token)
                 cls_token = embeddings[:, 0, :]  # [batch, hidden_size]
@@ -132,7 +124,7 @@ class BERT_CLS_Baseline(BaseModel):
             else:
                 # 無效 aspect，填充零向量
                 logits_list.append(
-                    torch.zeros(batch_size, self.num_classes, device=text_input_ids.device)
+                    torch.zeros(batch_size, self.num_classes, device=pair_input_ids.device)
                 )
 
         # 堆疊所有 aspects 的 logits

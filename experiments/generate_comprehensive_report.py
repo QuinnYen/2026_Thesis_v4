@@ -7,9 +7,10 @@
 - Baseline: BERT-CLS (使用 [CLS] token)
 - Method 1: Hierarchical BERT (階層式特徵提取，適合單 aspect 場景)
 - Method 2: IARN (Inter-Aspect Relation Network，適合多 aspect 場景)
+- Method 3: HSA (Hierarchical Syntax Attention，階層式語法注意力)
 
 場景自適應策略:
-- 單 aspect 為主 (Restaurants/Laptops) → Hierarchical BERT
+- 單 aspect 為主 (Restaurants/Laptops) → Hierarchical BERT 或 HSA
 - 多 aspect 為主 (MAMS) → IARN
 
 使用方法:
@@ -66,6 +67,8 @@ def find_all_experiments(results_dir, dataset):
                 exp_type = 'vp_iarn'
             elif '_improved_iarn_' in dir_name:
                 exp_type = 'iarn'
+            elif '_improved_hsa_' in dir_name:
+                exp_type = 'hsa'
             elif '_improved_hierarchical_' in dir_name:
                 exp_type = 'hierarchical'
             else:
@@ -193,6 +196,11 @@ def generate_text_report(dataset, results):
     report.append("             顯式建模多個 aspects 之間的交互關係")
     report.append("             Aspect-to-Aspect Attention + Relation-aware Gating")
     report.append("             適用於多面向數據集 (如 MAMS)")
+    report.append("")
+    report.append("  Method 3:  HSA (Hierarchical Syntax Attention)")
+    report.append("             階層式語法注意力網絡")
+    report.append("             在語法結構上進行階層式傳播 (Token → Phrase → Clause)")
+    report.append("             結合「階層式」概念與語法結構信息")
     report.append("")
 
     # 實驗配置 - 從實際實驗讀取
@@ -336,12 +344,12 @@ def generate_text_report(dataset, results):
         report.append("   - 推薦方法: IARN")
     else:
         report.append(f"   - {dataset.upper()} 數據集以單面向句子為主")
-        report.append("   - Hierarchical BERT 在此場景表現最佳")
-        report.append("   - 推薦方法: Hierarchical BERT")
+        report.append(f"   - 最佳模型: {best_f1['description']}")
+        report.append("   - HSA 結合階層式概念與語法結構，在 Neutral 類別上表現突出")
     report.append("")
     report.append("3. 模型選擇指南")
     report.append("   - 多面向比例 > 50%: 使用 IARN (Aspect-to-Aspect Attention)")
-    report.append("   - 多面向比例 ≤ 50%: 使用 Hierarchical BERT (階層特徵)")
+    report.append("   - 多面向比例 <= 50%: 使用 HSA 或 Hierarchical BERT (階層特徵)")
     report.append("")
     report.append("=" * 80)
 
@@ -366,6 +374,7 @@ def main():
         'improved': {
             'hierarchical': "Method 1 (Hierarchical)",
             'iarn': "Method 2 (IARN)",
+            'hsa': "Method 3 (HSA)",
         }
     }
 

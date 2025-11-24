@@ -2,7 +2,7 @@
 Multi-Aspect ABSA 實驗報告 - LAPTOPS Dataset
 ================================================================================
 
-生成時間: 2025-11-23 05:08:38
+生成時間: 2025-11-24 14:05:13
 
 --------------------------------------------------------------------------------
 模型架構
@@ -19,6 +19,11 @@ Multi-Aspect ABSA 實驗報告 - LAPTOPS Dataset
              顯式建模多個 aspects 之間的交互關係
              Aspect-to-Aspect Attention + Relation-aware Gating
              適用於多面向數據集 (如 MAMS)
+
+  Method 3:  HSA (Hierarchical Syntax Attention)
+             階層式語法注意力網絡
+             在語法結構上進行階層式傳播 (Token → Phrase → Clause)
+             結合「階層式」概念與語法結構信息
 
 --------------------------------------------------------------------------------
 實驗配置
@@ -40,9 +45,10 @@ Multi-Aspect ABSA 實驗報告 - LAPTOPS Dataset
 --------------------------------------------------------------------------------
 Model                             Acc (%)   Macro-F1 (%)   Best/Total Epoch
 --------------------------------------------------------------------------------
-Baseline (BERT-CLS)                 75.00          70.95                  9
-Method 1 (Hierarchical)             74.46          69.01                 13
-Method 2 (IARN)                     73.59          68.00                 11
+Baseline (BERT-CLS)                 75.22          69.63                  9
+Method 1 (Hierarchical)             75.98          70.56                  6
+Method 2 (IARN)                     71.96          65.02                 11
+Method 3 (HSA)                      76.30          72.33                 14
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
@@ -50,33 +56,35 @@ Per-class F1 Analysis (for error analysis)
 --------------------------------------------------------------------------------
 Model                                Neg F1       Neu F1       Pos F1
 --------------------------------------------------------------------------------
-Baseline (BERT-CLS)                   70.22        56.44        86.17
-Method 1 (Hierarchical)               69.81        51.14        86.09
-Method 2 (IARN)                       70.51        48.87        84.64
+Baseline (BERT-CLS)                   70.67        51.52        86.72
+Method 1 (Hierarchical)               72.77        52.20        86.72
+Method 2 (IARN)                       69.29        41.48        84.29
+Method 3 (HSA)                        71.85        58.90        86.22
 
 --------------------------------------------------------------------------------
 性能分析
 --------------------------------------------------------------------------------
 
 [Baseline] BERT-CLS:
-  Accuracy:  75.00%
-  Macro-F1:  70.95%
+  Accuracy:  75.22%
+  Macro-F1:  69.63%
   Best Epoch:    9 / None
 
-[Best Model] Baseline (BERT-CLS)
-  Macro-F1:  70.95%
-  Accuracy:  75.00%
-  Best Epoch:    9 / None
+[Best Model] Method 3 (HSA)
+  Macro-F1:  72.33%
+  Accuracy:  76.30%
+  Best Epoch:    14 / None
 
 [Improvement] 相對 Baseline 改進:
-  Macro-F1 提升: +0.00% (+0.00% relative)
+  Macro-F1 提升: +2.69% (+3.86% relative)
 
 --------------------------------------------------------------------------------
 實驗目錄
 --------------------------------------------------------------------------------
-  Baseline (BERT-CLS)       20251123_041540_baseline_bert_cls_drop0.3_bs32x1_focal
-  Method 1 (Hierarchical)   20251123_043132_improved_hierarchical_drop0.4_bs32x1_focal
-  Method 2 (IARN)           20251123_045057_improved_iarn_drop0.3_bs32x1_focal
+  Baseline (BERT-CLS)       20251124_134231_baseline_bert_cls_drop0.3_bs32x1_focal
+  Method 1 (Hierarchical)   20251124_134709_improved_hierarchical_drop0.4_bs32x1_focal
+  Method 2 (IARN)           20251124_135141_improved_iarn_drop0.3_bs32x1_focal
+  Method 3 (HSA)            20251124_135747_improved_hsa_drop0.3_bs32x1_focal
 
 --------------------------------------------------------------------------------
 結論
@@ -90,11 +98,11 @@ Method 2 (IARN)                       70.51        48.87        84.64
 
 2. 場景自適應策略
    - LAPTOPS 數據集以單面向句子為主
-   - Hierarchical BERT 在此場景表現最佳
-   - 推薦方法: Hierarchical BERT
+   - 最佳模型: Method 3 (HSA)
+   - HSA 結合階層式概念與語法結構，在 Neutral 類別上表現突出
 
 3. 模型選擇指南
    - 多面向比例 > 50%: 使用 IARN (Aspect-to-Aspect Attention)
-   - 多面向比例 ≤ 50%: 使用 Hierarchical BERT (階層特徵)
+   - 多面向比例 <= 50%: 使用 HSA 或 Hierarchical BERT (階層特徵)
 
 ================================================================================

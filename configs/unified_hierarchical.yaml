@@ -1,0 +1,55 @@
+# Unified Hierarchical BERT Configuration
+# 統一配置：所有數據集使用相同的超參數
+#
+# Method 1: Hierarchical BERT
+# 從 BERT 不同層提取 Low/Mid/High 層級特徵
+# 適用於單面向為主的數據集
+
+experiment_name: "hierarchical_bert"
+
+# 模型配置 (所有數據集統一)
+model:
+  improved: "hierarchical"
+  bert_model: "bert-base-uncased"
+  freeze_bert: false
+  hidden_dim: 768
+  dropout: 0.4
+
+# 數據配置
+data:
+  use_augmented: true  # 啟用 Neutral 數據增強 (Laptops)
+  min_aspects: 2
+  max_aspects: 8
+  include_single_aspect: true
+  virtual_aspect_mode: "overall"
+  max_text_len: 128
+  max_aspect_len: 10
+
+# 訓練配置 (所有數據集統一)
+training:
+  batch_size: 32
+  accumulation_steps: 1
+  epochs: 30
+  lr: 2.0e-5
+  weight_decay: 0.01
+  grad_clip: 1.0
+  patience: 10
+  seed: 42
+
+  # 調度器
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 損失函數 - 統一配置
+  loss_type: "focal"
+  focal_gamma: 2.0
+  class_weights: "auto"  # 動態計算，根據數據集自動調整
+
+  # Virtual aspect
+  virtual_weight: 0.5
+
+  # 對比學習 (Supervised Contrastive Learning)
+  # 實驗結果：效果有限，Neutral F1 只從 0.43 提升到 0.47
+  # 原因：Neutral 語義模糊，難以形成有效的 positive pairs
+  contrastive_weight: 0.0      # 0.0=禁用（目前禁用）
+  contrastive_temperature: 0.07  # 溫度參數，越小分布越尖銳

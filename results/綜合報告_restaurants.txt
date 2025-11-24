@@ -2,7 +2,7 @@
 Multi-Aspect ABSA 實驗報告 - RESTAURANTS Dataset
 ================================================================================
 
-生成時間: 2025-11-23 03:53:31
+生成時間: 2025-11-24 02:09:15
 
 --------------------------------------------------------------------------------
 模型架構
@@ -19,6 +19,11 @@ Multi-Aspect ABSA 實驗報告 - RESTAURANTS Dataset
              顯式建模多個 aspects 之間的交互關係
              Aspect-to-Aspect Attention + Relation-aware Gating
              適用於多面向數據集 (如 MAMS)
+
+  Method 3:  HSA (Hierarchical Syntax Attention)
+             階層式語法注意力網絡
+             在語法結構上進行階層式傳播 (Token → Phrase → Clause)
+             結合「階層式」概念與語法結構信息
 
 --------------------------------------------------------------------------------
 實驗配置
@@ -40,9 +45,10 @@ Multi-Aspect ABSA 實驗報告 - RESTAURANTS Dataset
 --------------------------------------------------------------------------------
 Model                             Acc (%)   Macro-F1 (%)   Best/Total Epoch
 --------------------------------------------------------------------------------
-Baseline (BERT-CLS)                 81.96          73.92                 13
-Method 1 (Hierarchical)             82.10          75.05                 12
-Method 2 (IARN)                     81.89          74.33                 16
+Baseline (BERT-CLS)                 80.69          72.22                 14
+Method 1 (Hierarchical)             81.04          72.97                 12
+Method 2 (IARN)                     81.61          72.92                 17
+Method 3 (HSA)                      80.90          72.17                 12
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
@@ -50,33 +56,35 @@ Per-class F1 Analysis (for error analysis)
 --------------------------------------------------------------------------------
 Model                                Neg F1       Neu F1       Pos F1
 --------------------------------------------------------------------------------
-Baseline (BERT-CLS)                   74.13        57.08        90.54
-Method 1 (Hierarchical)               78.02        57.14        89.98
-Method 2 (IARN)                       75.20        57.61        90.19
+Baseline (BERT-CLS)                   75.00        52.03        89.63
+Method 1 (Hierarchical)               76.15        53.30        89.45
+Method 2 (IARN)                       74.70        54.18        89.89
+Method 3 (HSA)                        72.76        53.53        90.23
 
 --------------------------------------------------------------------------------
 性能分析
 --------------------------------------------------------------------------------
 
 [Baseline] BERT-CLS:
-  Accuracy:  81.96%
-  Macro-F1:  73.92%
-  Best Epoch:    13 / None
+  Accuracy:  80.69%
+  Macro-F1:  72.22%
+  Best Epoch:    14 / None
 
 [Best Model] Method 1 (Hierarchical)
-  Macro-F1:  75.05%
-  Accuracy:  82.10%
+  Macro-F1:  72.97%
+  Accuracy:  81.04%
   Best Epoch:    12 / None
 
 [Improvement] 相對 Baseline 改進:
-  Macro-F1 提升: +1.13% (+1.53% relative)
+  Macro-F1 提升: +0.75% (+1.04% relative)
 
 --------------------------------------------------------------------------------
 實驗目錄
 --------------------------------------------------------------------------------
-  Baseline (BERT-CLS)       20251122_224032_baseline_bert_cls_drop0.3_bs32x1_focal
-  Method 1 (Hierarchical)   20251122_230244_improved_hierarchical_drop0.4_bs32x1_focal
-  Method 2 (IARN)           20251122_232401_improved_iarn_drop0.3_bs32x1_focal
+  Baseline (BERT-CLS)       20251124_013349_baseline_bert_cls_drop0.3_bs32x1_focal
+  Method 1 (Hierarchical)   20251124_014214_improved_hierarchical_drop0.4_bs32x1_focal
+  Method 2 (IARN)           20251124_015000_improved_iarn_drop0.3_bs32x1_focal
+  Method 3 (HSA)            20251124_015959_improved_hsa_drop0.3_bs32x1_focal
 
 --------------------------------------------------------------------------------
 結論
@@ -90,11 +98,11 @@ Method 2 (IARN)                       75.20        57.61        90.19
 
 2. 場景自適應策略
    - RESTAURANTS 數據集以單面向句子為主
-   - Hierarchical BERT 在此場景表現最佳
-   - 推薦方法: Hierarchical BERT
+   - 最佳模型: Method 1 (Hierarchical)
+   - HSA 結合階層式概念與語法結構，在 Neutral 類別上表現突出
 
 3. 模型選擇指南
    - 多面向比例 > 50%: 使用 IARN (Aspect-to-Aspect Attention)
-   - 多面向比例 ≤ 50%: 使用 Hierarchical BERT (階層特徵)
+   - 多面向比例 <= 50%: 使用 HSA 或 Hierarchical BERT (階層特徵)
 
 ================================================================================

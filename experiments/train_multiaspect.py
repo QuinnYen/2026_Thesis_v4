@@ -35,7 +35,7 @@ from data.memd_multiaspect import load_memd_data
 from data.multiaspect_dataset import create_multiaspect_dataloaders
 from models.bert_embedding import BERTForABSA
 from models.base_model import BaseModel
-from utils.focal_loss import get_loss_function
+from utils.focal_loss import get_loss_function, get_combined_loss_function, MultiAspectContrastiveLoss
 from utils.dataset_analyzer import analyze_dataset, print_dataset_stats
 from utils.model_selector import select_model, get_model_config, print_selection_result
 
@@ -385,16 +385,16 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating", ascii=True):
-            text_ids = batch['text_input_ids'].to(device)
-            text_mask = batch['text_attention_mask'].to(device)
-            aspect_ids = batch['aspect_input_ids'].to(device)
-            aspect_mask_input = batch['aspect_attention_mask'].to(device)
+            # 使用新的 sentence-pair 格式
+            pair_ids = batch['pair_input_ids'].to(device)
+            pair_mask = batch['pair_attention_mask'].to(device)
+            pair_type_ids = batch['pair_token_type_ids'].to(device)
             labels = batch['labels'].to(device)
             aspect_mask = batch['aspect_mask'].to(device)
             is_virtual = batch['is_virtual'].to(device)
 
-            # Forward
-            logits, extras = model(text_ids, text_mask, aspect_ids, aspect_mask_input, aspect_mask)
+            # Forward with sentence-pair format
+            logits, extras = model(pair_ids, pair_mask, pair_type_ids, aspect_mask)
 
             # 收集 gate 統計（PMAC 模組）或 layer attention（HBL 模組）
             if extras is not None:
@@ -554,8 +554,6 @@ def train_multiaspect_model(args):
     print(f"  Output: {exp_dir.name}")
 
     # 加載數據
-    print("\n" + "-"*60)
-    print("Loading Data")
 
     # 根據 dataset 參數設置數據路徑
     if args.dataset == 'restaurants':
@@ -615,11 +613,17 @@ def train_multiaspect_model(args):
         # 數據增強功能已移除（模組已封存）
         use_augmented = getattr(args, 'use_augmented', False)
 
-        if use_augmented:
-            pass  # 數據增強已移除
         # 數據路徑
         train_path = project_root / 'data' / 'raw' / 'semeval2014' / train_xml
         test_path = project_root / 'data' / 'raw' / 'semeval2014' / test_xml
+
+        # 增強數據路徑 (Neutral augmentation)
+        augmented_neutral_path = None
+        if use_augmented:
+            aug_path = project_root / 'data' / 'augmented' / f'{args.dataset}_neutral_augmented.xml'
+            if aug_path.exists():
+                augmented_neutral_path = str(aug_path)
+                print(f"  [Augmentation] 找到增強數據: {aug_path.name}")
 
         train_all_samples, test_samples = load_multiaspect_data(
             train_path=str(train_path),
@@ -627,7 +631,8 @@ def train_multiaspect_model(args):
             min_aspects=args.min_aspects,
             max_aspects=args.max_aspects,
             include_single_aspect=args.include_single_aspect,
-            virtual_aspect_mode=args.virtual_aspect_mode
+            virtual_aspect_mode=args.virtual_aspect_mode,
+            augmented_neutral_path=augmented_neutral_path
         )
 
         # 分割驗證集 (SemEval only)
@@ -636,6 +641,26 @@ def train_multiaspect_model(args):
         train_samples = train_all_samples[val_size:]
 
     print(f"  Train: {len(train_samples)} | Val: {len(val_samples)} | Test: {len(test_samples)}")
+
+    # 顯示類別分布
+    def count_label_distribution(samples):
+        """統計樣本的類別分布"""
+        from collections import Counter
+        label_counts = Counter()
+        for sample in samples:
+            for label in sample.labels:
+                if label >= 0:  # 忽略 padding (-100)
+                    label_counts[label] += 1
+        return label_counts
+
+    train_dist = count_label_distribution(train_samples)
+    total = sum(train_dist.values())
+    print(f"\n  [Class Distribution] Train set:")
+    label_names = {0: 'Negative', 1: 'Neutral', 2: 'Positive'}
+    for label in sorted(train_dist.keys()):
+        count = train_dist[label]
+        pct = count / total * 100 if total > 0 else 0
+        print(f"    {label_names.get(label, f'Label {label}'):10}: {count:5} ({pct:5.1f}%)")
 
     # 自動模型選擇
     if args.auto_select and not args.baseline and not args.improved:
@@ -670,6 +695,9 @@ def train_multiaspect_model(args):
 
     # 創建模型
     print("\n" + "-"*60)
+    # 檢查是否啟用對比學習
+    use_contrastive = getattr(args, 'contrastive_weight', 0.0) > 0
+
     if args.baseline:
         print(f"Creating Model: Baseline-{args.baseline}")
         model = create_baseline(
@@ -688,10 +716,13 @@ def train_multiaspect_model(args):
             freeze_bert=args.freeze_bert,
             hidden_dim=args.hidden_dim,
             num_classes=3,
-            dropout=args.dropout
+            dropout=args.dropout,
+            use_contrastive=use_contrastive  # 傳遞對比學習設定
         ).to(device)
 
     print(f"  BERT: {args.bert_model} | Dropout: {args.dropout}")
+    if use_contrastive:
+        print(f"  Contrastive Learning: weight={args.contrastive_weight}, temp={args.contrastive_temperature}")
 
     # 優化器
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -727,11 +758,24 @@ def train_multiaspect_model(args):
 
     # 訓練
     print("\n" + "-"*60)
-    print("Training" + (" [AMP]" if device.type == 'cuda' else ""))
-    print("-"*60)
+    # 混合精度訓練 (AMP) - DeBERTa 在 FP16/BF16 下都會溢出，必須禁用
+    is_deberta = 'deberta' in args.bert_model.lower()
 
-    # 混合精度訓練 (AMP)
-    use_amp = device.type == 'cuda'
+    if device.type == 'cuda' and is_deberta:
+        # DeBERTa 的注意力機制在混合精度下會溢出，必須使用 FP32
+        use_amp = False
+        amp_dtype = torch.float32
+        print("Training [FP32] (DeBERTa requires full precision)")
+    elif device.type == 'cuda':
+        use_amp = True
+        amp_dtype = torch.float16
+        print("Training [AMP-FP16]")
+    else:
+        use_amp = False
+        amp_dtype = torch.float32
+        print("Training [CPU]")
+
+    print("-"*60)
     scaler = GradScaler(enabled=use_amp)
 
     best_val_f1 = 0
@@ -758,29 +802,51 @@ def train_multiaspect_model(args):
 
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}", ascii=True)
         for batch_idx, batch in enumerate(progress_bar):
-            text_ids = batch['text_input_ids'].to(device)
-            text_mask = batch['text_attention_mask'].to(device)
-            aspect_ids = batch['aspect_input_ids'].to(device)
-            aspect_mask_input = batch['aspect_attention_mask'].to(device)
+            # 使用新的 sentence-pair 格式
+            pair_ids = batch['pair_input_ids'].to(device)
+            pair_mask = batch['pair_attention_mask'].to(device)
+            pair_type_ids = batch['pair_token_type_ids'].to(device)
             labels = batch['labels'].to(device)
             aspect_mask = batch['aspect_mask'].to(device)
             is_virtual = batch['is_virtual'].to(device)
 
             # Forward + Loss (with AMP autocast)
-            with autocast(device_type='cuda', enabled=use_amp):
-                logits, extras = model(text_ids, text_mask, aspect_ids, aspect_mask_input, aspect_mask)
+            with autocast(device_type='cuda', dtype=amp_dtype, enabled=use_amp):
+                logits, extras = model(pair_ids, pair_mask, pair_type_ids, aspect_mask)
 
                 # Loss
                 if args.loss_type != 'ce':
                     # 使用 Focal Loss 或 Adaptive Loss
                     if 'loss_fn' not in locals():
+                        # 決定 class weights
+                        if args.auto_class_weights:
+                            alpha = 'auto'
+                        else:
+                            alpha = args.class_weights
+
                         loss_fn = get_loss_function(
                             loss_type=args.loss_type,
-                            alpha=args.class_weights,
+                            alpha=alpha,
                             gamma=args.focal_gamma,
-                            virtual_weight=args.virtual_weight
+                            virtual_weight=args.virtual_weight,
+                            train_samples=train_samples  # 傳入訓練樣本以計算動態權重
                         ).to(device)
+
+                        # 創建對比損失函數（如果啟用）
+                        if use_contrastive and 'contrastive_loss_fn' not in locals():
+                            contrastive_loss_fn = MultiAspectContrastiveLoss(
+                                temperature=args.contrastive_temperature,
+                                contrastive_weight=args.contrastive_weight
+                            ).to(device)
+
                     loss = loss_fn(logits, labels, aspect_mask, is_virtual)
+
+                    # 添加對比損失（如果啟用且模型提供特徵）
+                    if use_contrastive and extras is not None and 'features' in extras:
+                        contrastive_loss = contrastive_loss_fn(
+                            extras['features'], labels, aspect_mask
+                        )
+                        loss = loss + contrastive_loss
                 else:
                     # 使用標準 CE Loss
                     loss = compute_multi_aspect_loss(
@@ -788,18 +854,39 @@ def train_multiaspect_model(args):
                         virtual_weight=args.virtual_weight
                     )
 
+                    # 對 CE Loss 也支持對比學習
+                    if use_contrastive:
+                        if 'contrastive_loss_fn' not in locals():
+                            contrastive_loss_fn = MultiAspectContrastiveLoss(
+                                temperature=args.contrastive_temperature,
+                                contrastive_weight=args.contrastive_weight
+                            ).to(device)
+
+                        if extras is not None and 'features' in extras:
+                            contrastive_loss = contrastive_loss_fn(
+                                extras['features'], labels, aspect_mask
+                            )
+                            loss = loss + contrastive_loss
+
                 # 梯度累積：將 loss 除以累積步數
                 loss = loss / args.accumulation_steps
 
-            # Backward (with AMP scaler)
-            scaler.scale(loss).backward()
+            # Backward (with AMP scaler for FP16, direct backward for BF16/FP32)
+            if scaler.is_enabled():
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
             # 每 accumulation_steps 步更新一次參數
             if (batch_idx + 1) % args.accumulation_steps == 0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                scaler.step(optimizer)
-                scaler.update()
+                if scaler.is_enabled():
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+                    optimizer.step()
                 optimizer.zero_grad()
 
                 # 更新學習率
@@ -994,10 +1081,11 @@ def main():
                         choices=['bert_cls', 'bert_only'],  # bert_only 為向後兼容
                         help='使用 baseline 模型 (bert_cls: 標準BERT-CLS baseline)')
     parser.add_argument('--improved', type=str, default=None,
-                        choices=['hierarchical', 'hierarchical_layerattn', 'iarn', 'vp_iarn'],
+                        choices=['hierarchical', 'hierarchical_layerattn', 'iarn', 'vp_iarn', 'hsa'],
                         help='使用改進模型:\n'
                              '  - hierarchical: Hierarchical BERT (適合單面向為主)\n'
-                             '  - iarn: Inter-Aspect Relation Network (適合多面向為主)')
+                             '  - iarn: Inter-Aspect Relation Network (適合多面向為主)\n'
+                             '  - hsa: Hierarchical Syntax Attention (階層式語法注意力)')
     parser.add_argument('--auto_select', action='store_true',
                         help='根據數據集特徵自動選擇最佳模型 (Hierarchical BERT 或 IARN)')
 
@@ -1041,8 +1129,16 @@ def main():
                         help='Label smoothing factor (default: 0.0, range: 0.0-1.0)')
     parser.add_argument('--class_weights', type=float, nargs=3, default=None,
                         help='Class weights [neg, neu, pos], e.g., --class_weights 1.0 2.0 1.0')
+    parser.add_argument('--auto_class_weights', action='store_true',
+                        help='動態計算 class weights (根據數據集分布自動調整)')
     parser.add_argument('--seed', type=int, default=42,
                         help='隨機種子（default: 42）')
+
+    # 對比學習參數
+    parser.add_argument('--contrastive_weight', type=float, default=0.0,
+                        help='對比損失權重 (0.0=禁用, 推薦 0.1-0.3)')
+    parser.add_argument('--contrastive_temperature', type=float, default=0.07,
+                        help='對比學習溫度參數 (default: 0.07)')
 
     args = parser.parse_args()
 
