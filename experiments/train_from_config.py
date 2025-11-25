@@ -84,7 +84,7 @@ def config_to_args(config):
                 args.extend(['--iarm_heads', str(model_cfg['iarm_heads'])])
 
             if 'iarm_layers' in model_cfg:
-                args.extend(['--iarm_layers', str(model_cfg['iarm_layers']])
+                args.extend(['--iarm_layers', str(model_cfg['iarm_layers'])])
 
         # Unified-HIARN 參數
         if 'multi_aspect_threshold' in model_cfg:
@@ -187,6 +187,13 @@ def config_to_args(config):
 
         if 'contrastive_temperature' in train_cfg:
             args.extend(['--contrastive_temperature', str(train_cfg['contrastive_temperature'])])
+
+        # Layer-wise Learning Rate Decay (LLRD)
+        if train_cfg.get('use_llrd'):
+            args.append('--use_llrd')
+
+        if 'llrd_decay' in train_cfg:
+            args.extend(['--llrd_decay', str(train_cfg['llrd_decay'])])
 
     return args
 

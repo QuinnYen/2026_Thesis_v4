@@ -2,95 +2,107 @@
 Unified-HIARN 實驗報告 - LAPTOPS Dataset
 ================================================================================
 
-生成時間: 2025-11-24 16:55:45
+生成時間: 2025-11-25 01:47:36
 
 --------------------------------------------------------------------------------
 模型架構: Unified-HIARN (Method 4)
 --------------------------------------------------------------------------------
-  核心創新: 統一 Hierarchical BERT 和 IARN，根據 aspect 數量動態融合
+  核心創新: 統一模型，根據**數據集**的多面向比例自動選擇策略
 
-  架構設計:
-    1. Hierarchical Feature Extraction (共享)
-       - Low (layers 1-4): 詞彙特徵
-       - Mid (layers 5-8): 語義特徵
-       - High (layers 9-12): 任務特徵
+  策略選擇 (數據集級別):
+    - 多面向比例 > 50%: 使用 IARN 模式 (aspect 間交互)
+    - 多面向比例 <= 50%: 使用 Hierarchical 模式 (純階層特徵)
 
-    2. Branch A: Hierarchical Features (純階層特徵)
-    3. Branch B: IARN Features (Aspect-to-Aspect Attention)
+  Hierarchical 分支:
+    - Low (layers 1-4): 詞彙特徵 → concat → fusion
+    - Mid (layers 5-8): 語義特徵 → concat → fusion
+    - High (layers 9-12): 任務特徵 → concat → fusion
+    - 與獨立 HierarchicalBERT 架構完全一致
 
-    4. Adaptive Fusion Gate:
-       - 單 aspect (n=1): gate=1.0, 100% Hierarchical
-       - 多 aspect (n>=2): gate=learned, 動態融合
-
-  融合公式:
-    fused = gate × hierarchical + (1-gate) × iarn
+  IARN 分支:
+    - Aspect-to-Aspect Attention + Relation-aware Gating
 
 --------------------------------------------------------------------------------
 實驗配置
 --------------------------------------------------------------------------------
-  Epochs:        None
-  Patience:      None
+  Epochs:        30
+  Patience:      10
   Learning Rate: 2e-5
   BERT Model:    BERT-base-uncased
   Optimizer:     AdamW
   Scheduler:     Cosine Annealing with Warmup (10%)
   Loss Type:     Focal Loss
-  Focal Gamma:   None
-  Class Weights: None
-  Dropout:       0.35
+  Focal Gamma:   2.0
+  Class Weights: auto (動態計算)
+  Dropout:       0.4
 
 --------------------------------------------------------------------------------
 實驗結果 (Main Results)
 --------------------------------------------------------------------------------
-  Accuracy:     74.57%
-  Macro-F1:     69.55%
-  Best Epoch:   15 / None
+  Accuracy:     75.00%
+  Macro-F1:     69.93%
+  Best Epoch:   13 / 30
 
 --------------------------------------------------------------------------------
 Per-class F1 Analysis
 --------------------------------------------------------------------------------
-  Negative F1:  69.68%
+  Negative F1:  70.64%
   Neutral F1:   52.94%
-  Positive F1:  86.04%
+  Positive F1:  86.21%
 
 --------------------------------------------------------------------------------
-融合機制分析 (Adaptive Fusion)
+策略分析 (Dataset-level Strategy)
 --------------------------------------------------------------------------------
-  [INFO] 融合指標未記錄 (需更新訓練腳本)
+  Unified-HIARN 使用數據集級別策略選擇:
+
+  策略決定方式:
+    1. 計算訓練集的多面向比例 (>=2 aspects 的樣本比例)
+    2. 若比例 > 50%: 使用 IARN 模式 (aspect 間交互)
+    3. 若比例 <= 50%: 使用 Hierarchical 模式 (純階層特徵)
+
+  各數據集預期策略:
+    - Restaurants/Laptops: ~30-40% 多面向 → Hierarchical 模式
+    - MAMS: 100% 多面向 → IARN 模式
+
+  優點:
+    - 單一模型適應不同數據集特性
+    - 低多面向數據集: 與獨立 Hierarchical 結果一致
+    - 高多面向數據集: 獲得 aspect 間交互能力
 
 --------------------------------------------------------------------------------
 與 Baseline 對比
 --------------------------------------------------------------------------------
 Model                             Acc (%)   Macro-F1 (%)
 --------------------------------------------------------------------------------
->>> Unified-HIARN (Method 4)        74.57          69.55
+>>> Unified-HIARN (Method 4)        75.00          69.93
     Baseline (BERT-CLS)             75.22          69.63
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
 改進分析 (vs Baseline)
 --------------------------------------------------------------------------------
-  Accuracy 提升:  -0.65%
-  Macro-F1 提升:  -0.08% (-0.12% relative)
-  Negative F1:    -0.99%
+  Accuracy 提升:  -0.22%
+  Macro-F1 提升:  +0.30% (+0.43% relative)
+  Negative F1:    -0.03%
   Neutral F1:     +1.43%
-  Positive F1:    -0.68%
+  Positive F1:    -0.51%
 
-  >>> Unified-HIARN 低於 Baseline (-0.08% Macro-F1)
+  >>> Unified-HIARN 優於 Baseline (+0.30% Macro-F1)
 
 --------------------------------------------------------------------------------
 實驗目錄
 --------------------------------------------------------------------------------
-  Unified-HIARN: 20251124_164919_improved_unified_hiarn_drop0.35_bs32x1_focal
+  Unified-HIARN: 20251125_014152_improved_unified_hiarn_llrd_drop0.4_bs32x1_focal
 
 --------------------------------------------------------------------------------
 結論
 --------------------------------------------------------------------------------
 
 Unified-HIARN 的設計目標:
-  1. 統一模型: 無需針對不同數據集選擇不同模型
-  2. 自適應融合: 根據樣本的 aspect 數量動態調整策略
-  3. 保持優勢: 單 aspect 場景保持 Hierarchical 的優勢
-              多 aspect 場景獲得 IARN 的交互能力
+  1. 統一模型: 無需針對不同數據集手動選擇模型
+  2. 數據集自適應: 根據多面向比例自動選擇最佳策略
+  3. 保持最優性能:
+     - Restaurants/Laptops: 自動使用 Hierarchical，與獨立模型一致
+     - MAMS: 自動使用 IARN，獲得 aspect 交互能力
 
 ================================================================================

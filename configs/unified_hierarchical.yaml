@@ -1,8 +1,9 @@
 # Unified Hierarchical BERT Configuration
 # 統一配置：所有數據集使用相同的超參數
 #
-# Method 1: Hierarchical BERT
+# Method 1: Hierarchical BERT + LLRD
 # 從 BERT 不同層提取 Low/Mid/High 層級特徵
+# 搭配 Layer-wise Learning Rate Decay 優化訓練
 # 適用於單面向為主的數據集
 
 experiment_name: "hierarchical_bert"
@@ -39,6 +40,11 @@ training:
   # 調度器
   use_scheduler: true
   warmup_ratio: 0.1
+
+  # Layer-wise Learning Rate Decay (LLRD)
+  # 階層式學習率：高層保持 base_lr，底層逐層衰減
+  use_llrd: true
+  llrd_decay: 0.95
 
   # 損失函數 - 統一配置
   loss_type: "focal"

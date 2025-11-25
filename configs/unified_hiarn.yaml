@@ -1,12 +1,15 @@
 # Unified-HIARN Configuration
 # 統一配置：所有數據集使用相同的超參數
 #
-# Unified Hierarchical-IARN (統一模型)
+# Unified Hierarchical-IARN (主力模型)
 # 核心創新：根據**數據集**的多面向比例自動選擇策略
 #
 # 策略選擇（數據集級別）：
 #   - 多面向比例 > 閾值 (50%): 使用 IARN 模式 (aspect 間交互)
 #   - 多面向比例 <= 閾值: 使用 Hierarchical 模式 (純階層特徵)
+#
+# 訓練優化：
+#   - LLRD (Layer-wise Learning Rate Decay): 階層式學習率
 #
 # 預期效果：
 #   - Restaurants/Laptops (多面向<50%): 自動使用 Hierarchical，與獨立模型一致
@@ -48,6 +51,11 @@ training:
   # 調度器
   use_scheduler: true
   warmup_ratio: 0.1
+
+  # Layer-wise Learning Rate Decay (LLRD)
+  # 階層式學習率：高層保持 base_lr，底層逐層衰減
+  use_llrd: true
+  llrd_decay: 0.95
 
   # 損失函數 - 統一配置
   loss_type: "focal"

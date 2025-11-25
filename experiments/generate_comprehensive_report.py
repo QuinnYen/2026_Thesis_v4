@@ -5,9 +5,13 @@
 
 模型架構:
 - Baseline: BERT-CLS (使用 [CLS] token)
-- Method 1: Hierarchical BERT (階層式特徵提取，適合單 aspect 場景)
+- Method 1: Hierarchical BERT (階層式BERT，從不同層提取特徵)
 - Method 2: IARN (Inter-Aspect Relation Network，適合多 aspect 場景)
 - Method 3: HSA (Hierarchical Syntax Attention，階層式語法注意力)
+
+注意:
+- Unified-HIARN (主力模型) 有獨立報告，不在此處列出
+- 所有模型均採用 LLRD (Layer-wise Learning Rate Decay) 優化訓練
 
 場景自適應策略:
 - 單 aspect 為主 (Restaurants/Laptops) → Hierarchical BERT 或 HSA
@@ -61,11 +65,8 @@ def find_all_experiments(results_dir, dataset):
                 continue
 
             dir_name = exp_dir.name
-            if '_improved_hierarchical_layerattn_' in dir_name:
-                exp_type = 'hierarchical_layerattn'
-            elif '_improved_vp_iarn_' in dir_name:
-                exp_type = 'vp_iarn'
-            elif '_improved_iarn_' in dir_name:
+            # unified_hiarn 主力模型有獨立報告，不在此處匹配
+            if '_improved_iarn_' in dir_name:
                 exp_type = 'iarn'
             elif '_improved_hsa_' in dir_name:
                 exp_type = 'hsa'
@@ -191,6 +192,7 @@ def generate_text_report(dataset, results):
     report.append("  Method 1:  Hierarchical BERT (階層式BERT)")
     report.append("             從 BERT 不同層提取 Low/Mid/High 層級特徵")
     report.append("             適用於單面向為主的數據集 (如 Restaurants, Laptops)")
+    report.append("             配置: unified_hierarchical.yaml")
     report.append("")
     report.append("  Method 2:  IARN (Inter-Aspect Relation Network)")
     report.append("             顯式建模多個 aspects 之間的交互關係")
@@ -201,6 +203,8 @@ def generate_text_report(dataset, results):
     report.append("             階層式語法注意力網絡")
     report.append("             在語法結構上進行階層式傳播 (Token → Phrase → Clause)")
     report.append("             結合「階層式」概念與語法結構信息")
+    report.append("")
+    report.append("  (所有模型均採用 LLRD 優化訓練)")
     report.append("")
 
     # 實驗配置 - 從實際實驗讀取
@@ -371,9 +375,10 @@ def main():
             'bert_cls': "Baseline (BERT-CLS)",
         },
         'improved': {
-            'hierarchical': "Method 1 (Hierarchical)",
+            'hierarchical': "Method 1 (Hierarchical BERT)",
             'iarn': "Method 2 (IARN)",
             'hsa': "Method 3 (HSA)",
+            # unified_hiarn 主力模型有獨立報告，不在此處列出
         }
     }
 

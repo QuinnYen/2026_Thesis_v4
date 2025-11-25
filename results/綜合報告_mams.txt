@@ -2,7 +2,7 @@
 Multi-Aspect ABSA 實驗報告 - MAMS Dataset
 ================================================================================
 
-生成時間: 2025-11-24 01:32:42
+生成時間: 2025-11-25 03:18:07
 
 --------------------------------------------------------------------------------
 模型架構
@@ -14,6 +14,7 @@ Multi-Aspect ABSA 實驗報告 - MAMS Dataset
   Method 1:  Hierarchical BERT (階層式BERT)
              從 BERT 不同層提取 Low/Mid/High 層級特徵
              適用於單面向為主的數據集 (如 Restaurants, Laptops)
+             配置: unified_hierarchical.yaml
 
   Method 2:  IARN (Inter-Aspect Relation Network)
              顯式建模多個 aspects 之間的交互關係
@@ -25,20 +26,21 @@ Multi-Aspect ABSA 實驗報告 - MAMS Dataset
              在語法結構上進行階層式傳播 (Token → Phrase → Clause)
              結合「階層式」概念與語法結構信息
 
+  (所有模型均採用 LLRD 優化訓練)
+
 --------------------------------------------------------------------------------
 實驗配置
 --------------------------------------------------------------------------------
-  Epochs:        40
-  Patience:      12
+  Epochs:        30
+  Patience:      10
   Learning Rate: 2e-5
   BERT Model:    BERT-base-uncased
   Optimizer:     AdamW
   Scheduler:     Cosine Annealing with Warmup (10%)
   Loss Type:     Focal Loss
   Focal Gamma:   2.0
-  Class Weights: [1.0, 3.0, 1.0]
-  Dropout:       0.3-0.45
-  說明:          MAMS 相對平衡，可充分訓練 (VP-ACL 策略)
+  Class Weights: auto (動態計算)
+  Dropout:       0.3-0.4 (各模型略有不同)
 
 --------------------------------------------------------------------------------
 實驗結果對比 (Main Results)
@@ -46,7 +48,7 @@ Multi-Aspect ABSA 實驗報告 - MAMS Dataset
 Model                             Acc (%)   Macro-F1 (%)   Best/Total Epoch
 --------------------------------------------------------------------------------
 Baseline (BERT-CLS)                 83.40          83.05                 11
-Method 1 (Hierarchical)             83.77          83.29                 22
+Method 1 (Hierarchical BERT)        83.92          83.48                 29
 Method 2 (IARN)                     85.12          84.56                 16
 Method 3 (HSA)                      83.25          82.74                 11
 --------------------------------------------------------------------------------
@@ -57,7 +59,7 @@ Per-class F1 Analysis (for error analysis)
 Model                                Neg F1       Neu F1       Pos F1
 --------------------------------------------------------------------------------
 Baseline (BERT-CLS)                   81.61        85.06        82.48
-Method 1 (Hierarchical)               81.02        85.69        83.14
+Method 1 (Hierarchical BERT)          81.75        85.79        82.91
 Method 2 (IARN)                       81.94        87.41        84.33
 Method 3 (HSA)                        80.24        85.18        82.81
 
@@ -81,10 +83,10 @@ Method 3 (HSA)                        80.24        85.18        82.81
 --------------------------------------------------------------------------------
 實驗目錄
 --------------------------------------------------------------------------------
-  Baseline (BERT-CLS)       20251124_000116_baseline_bert_cls_drop0.3_bs32x1_focal
-  Method 1 (Hierarchical)   20251124_001937_improved_hierarchical_drop0.4_bs32x1_focal
-  Method 2 (IARN)           20251124_004632_improved_iarn_drop0.3_bs32x1_focal
-  Method 3 (HSA)            20251124_011007_improved_hsa_drop0.3_bs32x1_focal
+  Baseline (BERT-CLS)       20251125_014741_baseline_bert_cls_drop0.3_bs32x1_focal
+  Method 1 (Hierarchical BERT) 20251125_020554_improved_hierarchical_llrd_drop0.4_bs32x1_focal
+  Method 2 (IARN)           20251125_023227_improved_iarn_drop0.3_bs32x1_focal
+  Method 3 (HSA)            20251125_025542_improved_hsa_drop0.3_bs32x1_focal
 
 --------------------------------------------------------------------------------
 結論

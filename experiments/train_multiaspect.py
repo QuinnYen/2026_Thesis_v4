@@ -298,6 +298,153 @@ def generate_training_visualizations(results, save_dir):
         f.write('\n'.join(report_lines))
 
 
+def create_llrd_optimizer(model, base_lr, weight_decay, llrd_decay=0.95):
+    """
+    創建帶有 Layer-wise Learning Rate Decay (LLRD) 的優化器
+
+    設計理念：
+        - 高層 (靠近 Output): 保持 base_lr，快速適應 ABSA 任務
+        - 底層 (靠近 Input): 較小 lr，保留 BERT 原本的通用特徵
+
+    參數:
+        model: 模型
+        base_lr: 基礎學習率 (用於最高層和非 BERT 參數)
+        weight_decay: 權重衰減
+        llrd_decay: 衰減係數 (default: 0.95，每往下一層 LR 乘上此係數)
+
+    返回:
+        AdamW optimizer with layer-wise learning rates
+    """
+    # 找到 BERT 模型
+    bert_model = None
+    if hasattr(model, 'bert_absa'):
+        bert_model = model.bert_absa.bert_embedding.bert
+    elif hasattr(model, 'bert'):
+        bert_model = model.bert
+
+    if bert_model is None:
+        # 如果找不到 BERT，使用統一學習率
+        print("  LLRD: BERT model not found, using uniform lr")
+        return torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=weight_decay)
+
+    # 分組參數
+    param_groups = []
+    no_decay = ['bias', 'LayerNorm.weight', 'LayerNorm.bias', 'layer_norm']
+
+    # BERT 有 12 層 encoder layers (layer 0-11)
+    # 我們希望: layer 11 (最高) 用 base_lr, layer 0 (最低) 用 base_lr * decay^11
+    num_layers = 12
+
+    # 1. BERT embeddings (最底層，學習率最小)
+    embedding_lr = base_lr * (llrd_decay ** (num_layers + 1))
+    embedding_params = []
+    embedding_params_no_decay = []
+
+    for name, param in bert_model.embeddings.named_parameters():
+        if any(nd in name for nd in no_decay):
+            embedding_params_no_decay.append(param)
+        else:
+            embedding_params.append(param)
+
+    if embedding_params:
+        param_groups.append({
+            'params': embedding_params,
+            'lr': embedding_lr,
+            'weight_decay': weight_decay
+        })
+    if embedding_params_no_decay:
+        param_groups.append({
+            'params': embedding_params_no_decay,
+            'lr': embedding_lr,
+            'weight_decay': 0.0
+        })
+
+    # 2. BERT encoder layers (layer 0-11)
+    for layer_idx in range(num_layers):
+        layer_lr = base_lr * (llrd_decay ** (num_layers - layer_idx - 1))
+        layer_params = []
+        layer_params_no_decay = []
+
+        layer = bert_model.encoder.layer[layer_idx]
+        for name, param in layer.named_parameters():
+            if any(nd in name for nd in no_decay):
+                layer_params_no_decay.append(param)
+            else:
+                layer_params.append(param)
+
+        if layer_params:
+            param_groups.append({
+                'params': layer_params,
+                'lr': layer_lr,
+                'weight_decay': weight_decay
+            })
+        if layer_params_no_decay:
+            param_groups.append({
+                'params': layer_params_no_decay,
+                'lr': layer_lr,
+                'weight_decay': 0.0
+            })
+
+    # 3. BERT pooler (如果存在)
+    if hasattr(bert_model, 'pooler') and bert_model.pooler is not None:
+        pooler_params = []
+        pooler_params_no_decay = []
+        for name, param in bert_model.pooler.named_parameters():
+            if any(nd in name for nd in no_decay):
+                pooler_params_no_decay.append(param)
+            else:
+                pooler_params.append(param)
+
+        if pooler_params:
+            param_groups.append({
+                'params': pooler_params,
+                'lr': base_lr,
+                'weight_decay': weight_decay
+            })
+        if pooler_params_no_decay:
+            param_groups.append({
+                'params': pooler_params_no_decay,
+                'lr': base_lr,
+                'weight_decay': 0.0
+            })
+
+    # 4. 非 BERT 參數 (classifier, attention layers 等) - 使用 base_lr
+    bert_param_ids = set()
+    for param in bert_model.parameters():
+        bert_param_ids.add(id(param))
+
+    other_params = []
+    other_params_no_decay = []
+    for name, param in model.named_parameters():
+        if id(param) not in bert_param_ids:
+            if any(nd in name for nd in no_decay):
+                other_params_no_decay.append(param)
+            else:
+                other_params.append(param)
+
+    if other_params:
+        param_groups.append({
+            'params': other_params,
+            'lr': base_lr,
+            'weight_decay': weight_decay
+        })
+    if other_params_no_decay:
+        param_groups.append({
+            'params': other_params_no_decay,
+            'lr': base_lr,
+            'weight_decay': 0.0
+        })
+
+    # 打印 LLRD 信息
+    print(f"  LLRD enabled: decay={llrd_decay}")
+    print(f"    Embeddings lr: {embedding_lr:.2e}")
+    print(f"    Layer 0 lr:    {base_lr * (llrd_decay ** 11):.2e}")
+    print(f"    Layer 11 lr:   {base_lr:.2e}")
+    print(f"    Classifier lr: {base_lr:.2e}")
+
+    return torch.optim.AdamW(param_groups, lr=base_lr, weight_decay=weight_decay)
+
+
 def compute_multi_aspect_loss(
     logits: torch.Tensor,
     labels: torch.Tensor,
@@ -527,6 +674,9 @@ def train_multiaspect_model(args):
     elif args.improved:
         # Improved 實驗
         exp_name = f"improved_{args.improved}"
+        # 如果使用 LLRD，加入標記以區分
+        if args.use_llrd:
+            exp_name += "_llrd"
         exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
         exp_name += f"_{args.loss_type}"
     else:
@@ -759,8 +909,16 @@ def train_multiaspect_model(args):
     if use_contrastive:
         print(f"  Contrastive Learning: weight={args.contrastive_weight}, temp={args.contrastive_temperature}")
 
-    # 優化器
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # 優化器 (支援 LLRD)
+    if args.use_llrd:
+        optimizer = create_llrd_optimizer(
+            model,
+            base_lr=args.lr,
+            weight_decay=args.weight_decay,
+            llrd_decay=args.llrd_decay
+        )
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # 學習率調度器（Cosine Annealing + Warmup）
     scheduler = None
@@ -1117,9 +1275,10 @@ def main():
                         choices=['bert_cls', 'bert_only'],  # bert_only 為向後兼容
                         help='使用 baseline 模型 (bert_cls: 標準BERT-CLS baseline)')
     parser.add_argument('--improved', type=str, default=None,
-                        choices=['hierarchical', 'hierarchical_layerattn', 'iarn', 'vp_iarn', 'hsa', 'unified_hiarn'],
+                        choices=['hierarchical', 'hierarchical_layerattn', 'aspect_aware', 'iarn', 'vp_iarn', 'hsa', 'unified_hiarn'],
                         help='使用改進模型:\n'
                              '  - hierarchical: Hierarchical BERT (適合單面向為主)\n'
+                             '  - aspect_aware: Aspect-aware Pooling (使用 aspect 做 attention query)\n'
                              '  - iarn: Inter-Aspect Relation Network (適合多面向為主)\n'
                              '  - hsa: Hierarchical Syntax Attention (階層式語法注意力)\n'
                              '  - unified_hiarn: Unified-HIARN (動態融合 Hierarchical + IARN)')
@@ -1178,6 +1337,12 @@ def main():
                         help='對比損失權重 (0.0=禁用, 推薦 0.1-0.3)')
     parser.add_argument('--contrastive_temperature', type=float, default=0.07,
                         help='對比學習溫度參數 (default: 0.07)')
+
+    # Layer-wise Learning Rate Decay (LLRD)
+    parser.add_argument('--use_llrd', action='store_true',
+                        help='啟用 Layer-wise Learning Rate Decay')
+    parser.add_argument('--llrd_decay', type=float, default=0.95,
+                        help='LLRD 衰減係數 (default: 0.95，每往下一層 LR 乘上此係數)')
 
     args = parser.parse_args()
 

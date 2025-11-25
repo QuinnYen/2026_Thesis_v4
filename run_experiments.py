@@ -30,9 +30,12 @@
     python run_experiments.py --dataset rest16 --all
     python run_experiments.py --dataset lap16 --all
 
+    # 全數據集完整模式: 一條命令執行所有數據集的完整實驗
+    python run_experiments.py --full-run
+
 執行順序 (標準模式):
     1. Baseline: BERT-CLS
-    2. Method 1: Hierarchical BERT (BERT 層級特徵)
+    2. Method 1: Hierarchical BERT (階層式BERT)
     3. Method 2: IARN (Aspect 間交互)
     4. Method 3: HSA - Hierarchical Syntax Attention (階層式語法注意力)
     5. 生成綜合報告
@@ -173,15 +176,58 @@ def run_unified_hiarn_experiment(dataset):
 
 def main():
     parser = argparse.ArgumentParser(description='批次執行實驗')
-    parser.add_argument('--dataset', type=str, required=True,
+    parser.add_argument('--dataset', type=str, default=None,
                         choices=['restaurants', 'mams', 'laptops', 'rest16', 'lap16'],
                         help='數據集選擇 (restaurants, mams, laptops, rest16, lap16)')
     parser.add_argument('--unified', action='store_true',
                         help='Unified-HIARN 模式: 只執行 Method 4 (統一模型)')
     parser.add_argument('--all', action='store_true',
                         help='完整模式: 執行所有方法 (標準 + Unified-HIARN)')
+    parser.add_argument('--full-run', action='store_true',
+                        help='全數據集完整模式: 對所有數據集執行完整實驗')
 
     args = parser.parse_args()
+
+    # 全數據集完整模式
+    if args.full_run:
+        all_datasets = ['restaurants', 'laptops', 'mams']
+        total_results = {}
+
+        print(f"\n{'='*80}")
+        print(f"[Full Run Mode] Running all experiments on {len(all_datasets)} datasets")
+        print(f"Datasets: {', '.join(all_datasets)}")
+        print(f"{'='*80}\n")
+
+        for dataset in all_datasets:
+            print(f"\n{'#'*80}")
+            print(f"# Dataset: {dataset.upper()}")
+            print(f"{'#'*80}")
+
+            # 執行標準模式
+            standard_success, standard_total = run_standard_experiments(dataset)
+
+            # 執行 Unified-HIARN
+            unified_success = run_unified_hiarn_experiment(dataset)
+
+            total_results[dataset] = {
+                'standard': (standard_success, standard_total),
+                'unified': unified_success
+            }
+
+        # 總結報告
+        print(f"\n{'='*80}")
+        print(f"[Full Run Summary] All datasets completed")
+        print(f"{'='*80}")
+        for dataset, results in total_results.items():
+            std_success, std_total = results['standard']
+            unified = 'Success' if results['unified'] else 'Failed'
+            print(f"  {dataset.upper():12s}: Standard {std_success}/{std_total}, Unified-HIARN {unified}")
+        print(f"{'='*80}\n")
+        return
+
+    # 檢查 dataset 參數
+    if args.dataset is None:
+        parser.error("--dataset is required unless using --full-run")
 
     # Unified-HIARN 模式
     if args.unified:

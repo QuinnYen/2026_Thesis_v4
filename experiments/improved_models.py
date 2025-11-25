@@ -235,30 +235,27 @@ class HierarchicalBERT(BaseModel):
 
 class HierarchicalBERT_LayerAttn(BaseModel):
     """
-    Hierarchical BERT + Layer-wise Attention
+    Hierarchical BERT + Layer-wise Attention (HBL)
 
     基於 UDify (Kondratyuk & Straka, EMNLP 2019) 的 Layer-wise Attention
 
     架構:
-        BERT Layers → Extract Multi-Level Features → Hierarchical Fusion
-        → Layer-wise Attention (可學習權重) → Classifier
+        BERT Layers → Extract Multi-Level Features → Layer-wise Attention → Classifier
 
-    改進點:
-        1. 為 Low/Mid/High 三個層級分別學習動態權重
-        2. 替代原先的固定 concatenation (Baseline_HierarchicalBERT)
-        3. 讓模型自動學習哪個層級最重要
-        4. 減少分類器參數量 (2304 → 768 維)
+    設計理念:
+        1. 從 BERT 不同層提取 Low/Mid/High 層級特徵
+        2. 使用可學習權重動態加權組合（取代固定拼接）
+        3. 減少分類器參數量 (hidden_dim*3 → hidden_dim)
+        4. 提供可解釋性（權重可視化）
 
     公式:
         α = [w_low, w_mid, w_high]  # 可學習參數
         β = softmax(α)               # 歸一化權重
         h = Σ(β_i * h_i)             # 加權組合
 
-    預期提升:
-        - MAMS: +2~3% F1
-        - Restaurants: +2~3% F1
-        - 改善過擬合問題
-        - 提供可解釋性 (可視化權重分布)
+    與 HierarchicalBERT 的差異:
+        - HierarchicalBERT: 固定拼接 concat([low, mid, high])
+        - HBL: 動態加權 β₁×low + β₂×mid + β₃×high
 
     參考文獻:
         Kondratyuk, D., & Straka, M. (2019). 75 Languages, 1 Model: Parsing
@@ -291,45 +288,40 @@ class HierarchicalBERT_LayerAttn(BaseModel):
 
         bert_hidden_size = self.bert_absa.hidden_size
 
-        # === Multi-level feature extractors ===
-        # Low-level: 淺層特徵 (詞彙、句法)
-        self.low_projection = nn.Linear(bert_hidden_size, hidden_dim)
+        # Hierarchical layer indices (BERT: 12 layers)
+        self.low_layers = [1, 2, 3, 4]
+        self.mid_layers = [5, 6, 7, 8]
+        self.high_layers = [9, 10, 11, 12]
 
-        # Mid-level: 中層特徵 (短語、局部語義)
-        self.mid_projection = nn.Linear(bert_hidden_size, hidden_dim)
-
-        # High-level: 深層特徵 (全局語義、上下文)
-        self.high_projection = nn.Linear(bert_hidden_size, hidden_dim)
-
-        # === Aspect-aware fusion (每個層級) ===
-        self.low_fusion = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=4,
-            dropout=dropout,
-            batch_first=True
+        # === Fusion layers for each level (與 HierarchicalBERT 一致的 concat 方式) ===
+        self.low_fusion = nn.Sequential(
+            nn.Linear(bert_hidden_size * len(self.low_layers), hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
         )
 
-        self.mid_fusion = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=4,
-            dropout=dropout,
-            batch_first=True
+        self.mid_fusion = nn.Sequential(
+            nn.Linear(bert_hidden_size * len(self.mid_layers), hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
         )
 
-        self.high_fusion = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=4,
-            dropout=dropout,
-            batch_first=True
+        self.high_fusion = nn.Sequential(
+            nn.Linear(bert_hidden_size * len(self.high_layers), hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
         )
 
         # ⭐ Layer-wise Attention Weights (可學習參數)
-        # 使用非均勻初始化打破對稱性，幫助權重學習
+        # 使用非均勻初始化打破對稱性
         # 根據 UDify 論文，高層特徵通常更重要，因此給予較高初始值
         self.layer_weights = nn.Parameter(torch.tensor([0.5, 1.0, 1.5]))
 
         # === Final classifier ===
-        # 注意：輸入維度改為 hidden_dim (不再是 hidden_dim * 3)
+        # 輸入維度為 hidden_dim (加權求和後)
         self.classifier = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
@@ -340,142 +332,337 @@ class HierarchicalBERT_LayerAttn(BaseModel):
 
     def forward(
         self,
-        input_ids,
-        attention_mask,
-        aspect_input_ids,
-        aspect_attention_mask,
-        aspect_positions=None,
-        labels=None
+        pair_input_ids: torch.Tensor,
+        pair_attention_mask: torch.Tensor,
+        pair_token_type_ids: torch.Tensor,
+        aspect_mask: torch.Tensor
     ):
         """
         前向傳播
 
-        Args:
-            input_ids: [batch, seq_len]
-            attention_mask: [batch, seq_len]
-            aspect_input_ids: [batch, max_aspects, aspect_len]
-            aspect_attention_mask: [batch, max_aspects, aspect_len]
-            aspect_positions: [batch, max_aspects, 2] (start, end) 位置
-            labels: [batch, max_aspects]
+        使用 BERT sentence-pair 格式：[CLS] text [SEP] aspect [SEP]
 
-        Returns:
+        參數:
+            pair_input_ids: [batch, max_aspects, seq_len] - 已編碼的 text-aspect pairs
+            pair_attention_mask: [batch, max_aspects, seq_len]
+            pair_token_type_ids: [batch, max_aspects, seq_len] - 區分 text(0) 和 aspect(1)
+            aspect_mask: [batch, max_aspects] - bool，標記有效 aspects
+
+        返回:
             logits: [batch, max_aspects, num_classes]
             extras: dict with 'layer_attention' weights
         """
-        batch_size = input_ids.size(0)
-        max_aspects = aspect_input_ids.size(1)
+        batch_size, max_aspects, seq_len = pair_input_ids.shape
 
-        # === 1. BERT encoding ===
-        # BERTEmbedding.forward() returns (sequence_output, all_hidden_states) when output_hidden_states=True
-        bert_forward_result = self.bert_absa.bert_embedding(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-
-        # Unpack the result
-        if isinstance(bert_forward_result, tuple):
-            sequence_output, all_hidden_states = bert_forward_result
-        else:
-            raise ValueError("BERTEmbedding should return tuple when output_hidden_states=True")
-
-        # all_hidden_states: tuple of [batch, seq_len, hidden_size]
-        # DistilBERT: 7 層 (embedding + 6 transformer layers)
-
-        num_layers = len(all_hidden_states)
-
-        # === 2. Extract hierarchical features ===
-        # Low-level: 前 1/3 層 (層 1-2)
-        low_end = max(1, num_layers // 3)
-        low_states = torch.mean(torch.stack(all_hidden_states[1:low_end+1]), dim=0)
-
-        # Mid-level: 中 1/3 層 (層 3-4)
-        mid_start = low_end + 1
-        mid_end = max(mid_start, 2 * num_layers // 3)
-        mid_states = torch.mean(torch.stack(all_hidden_states[mid_start:mid_end+1]), dim=0)
-
-        # High-level: 後 1/3 層 (層 5-6)
-        high_start = mid_end + 1
-        high_states = torch.mean(torch.stack(all_hidden_states[high_start:]), dim=0)
-
-        # Project to hidden_dim
-        low_features = self.low_projection(low_states)    # [batch, seq_len, hidden_dim]
-        mid_features = self.mid_projection(mid_states)    # [batch, seq_len, hidden_dim]
-        high_features = self.high_projection(high_states) # [batch, seq_len, hidden_dim]
-
-        # === 3. Process each aspect ===
         logits_list = []
 
         for i in range(max_aspects):
-            # Aspect BERT encoding
-            aspect_mask = aspect_attention_mask[:, i, :]  # [batch, aspect_len]
+            if aspect_mask[:, i].any():
+                # 獲取第 i 個 aspect 的 sentence-pair 編碼
+                input_ids = pair_input_ids[:, i, :]
+                attention_mask = pair_attention_mask[:, i, :]
 
-            # Skip invalid aspects (all padding)
-            if aspect_mask.sum() == 0:
-                logits_list.append(torch.zeros(batch_size, self.num_classes, device=input_ids.device))
-                continue
+                # Get hierarchical features from BERT
+                outputs = self.bert_absa.bert_embedding.bert(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    return_dict=True
+                )
 
-            aspect_result = self.bert_absa.bert_embedding(
-                input_ids=aspect_input_ids[:, i, :],
-                attention_mask=aspect_mask
-            )
-            # Unpack if tuple (when output_hidden_states=True)
-            if isinstance(aspect_result, tuple):
-                aspect_output = aspect_result[0]  # sequence_output only
+                all_hidden_states = outputs.hidden_states
+
+                # Extract [CLS] token from different layers (使用 concat)
+                low_features = []
+                for layer_idx in self.low_layers:
+                    low_features.append(all_hidden_states[layer_idx][:, 0, :])
+                low_features = torch.cat(low_features, dim=-1)  # [batch, hidden*4]
+
+                mid_features = []
+                for layer_idx in self.mid_layers:
+                    mid_features.append(all_hidden_states[layer_idx][:, 0, :])
+                mid_features = torch.cat(mid_features, dim=-1)
+
+                high_features = []
+                for layer_idx in self.high_layers:
+                    high_features.append(all_hidden_states[layer_idx][:, 0, :])
+                high_features = torch.cat(high_features, dim=-1)
+
+                # Hierarchical fusion
+                low_fused = self.low_fusion(low_features)    # [batch, hidden_dim]
+                mid_fused = self.mid_fusion(mid_features)    # [batch, hidden_dim]
+                high_fused = self.high_fusion(high_features)  # [batch, hidden_dim]
+
+                # ⭐ Layer-wise Attention: 動態加權組合
+                layer_attention = torch.softmax(self.layer_weights, dim=0)  # [3]
+
+                # 加權求和 (取代固定拼接)
+                hierarchical_repr = (
+                    layer_attention[0] * low_fused +
+                    layer_attention[1] * mid_fused +
+                    layer_attention[2] * high_fused
+                )  # [batch, hidden_dim]
+
+                # Classification
+                logit = self.classifier(hierarchical_repr)  # [batch, num_classes]
+                logits_list.append(logit)
             else:
-                aspect_output = aspect_result
-
-            aspect_repr = aspect_output[:, 0, :]  # [CLS] token → [batch, hidden_size]
-            aspect_repr = aspect_repr.unsqueeze(1)  # [batch, 1, hidden_size]
-
-            # === 3.1 Aspect-aware fusion (每個層級) ===
-            # Low-level fusion
-            low_fused, _ = self.low_fusion(
-                query=aspect_repr,
-                key=low_features,
-                value=low_features,
-                key_padding_mask=~attention_mask.bool()
-            )
-            low_fused = low_fused.squeeze(1)  # [batch, hidden_dim]
-
-            # Mid-level fusion
-            mid_fused, _ = self.mid_fusion(
-                query=aspect_repr,
-                key=mid_features,
-                value=mid_features,
-                key_padding_mask=~attention_mask.bool()
-            )
-            mid_fused = mid_fused.squeeze(1)  # [batch, hidden_dim]
-
-            # High-level fusion
-            high_fused, _ = self.high_fusion(
-                query=aspect_repr,
-                key=high_features,
-                value=high_features,
-                key_padding_mask=~attention_mask.bool()
-            )
-            high_fused = high_fused.squeeze(1)  # [batch, hidden_dim]
-
-            # ⭐ 3.2 Layer-wise Attention: 動態加權組合
-            # 計算歸一化權重
-            layer_attention = torch.softmax(self.layer_weights, dim=0)  # [3]
-
-            # 加權求和
-            hierarchical_repr = (
-                layer_attention[0] * low_fused +
-                layer_attention[1] * mid_fused +
-                layer_attention[2] * high_fused
-            )  # [batch, hidden_dim]
-
-            # === 3.3 Classification ===
-            logit = self.classifier(hierarchical_repr)  # [batch, num_classes]
-            logits_list.append(logit)
+                logits_list.append(
+                    torch.zeros(batch_size, self.num_classes, device=pair_input_ids.device)
+                )
 
         logits = torch.stack(logits_list, dim=1)  # [batch, max_aspects, num_classes]
+
+        # 計算當前的 layer attention weights
+        layer_attention = torch.softmax(self.layer_weights, dim=0)
 
         # 返回額外資訊：學到的層級權重
         extras = {
             'layer_attention': layer_attention.detach().cpu().numpy()
         }
+
+        return logits, extras
+
+
+class HierarchicalBERT_AspectAware(BaseModel):
+    """
+    Hierarchical BERT + Aspect-aware Pooling
+
+    核心改進：使用 Aspect-guided Attention 替代純 [CLS] token
+
+    設計理念：
+        1. 從 BERT 不同層提取 Low/Mid/High 層級的完整序列特徵
+        2. 使用 aspect 表示作為 query，對每個層級的序列做 attention
+        3. 捕捉 aspect 周圍的上下文信息（修飾語、否定詞等）
+        4. 保留固定拼接，但使用 aspect-aware 的特徵
+
+    與 HierarchicalBERT 的差異：
+        - HierarchicalBERT: 只用 [CLS] token
+        - AspectAware: 用 aspect 作為 query 對整個序列做 attention
+
+    預期效果：
+        - 更好地捕捉 "not good"、"very bad" 等修飾語
+        - 對 Neutral 類別有提升（需要細微語義差異）
+        - +1.0~2.0% Macro-F1
+    """
+
+    def __init__(
+        self,
+        bert_model_name: str = 'bert-base-uncased',
+        freeze_bert: bool = False,
+        hidden_dim: int = 768,
+        num_classes: int = 3,
+        dropout: float = 0.1,
+        num_attention_heads: int = 4
+    ):
+        super(HierarchicalBERT_AspectAware, self).__init__()
+
+        self.hidden_dim = hidden_dim
+        self.num_classes = num_classes
+
+        # BERT with hierarchical output
+        self.bert_absa = BERTForABSA(
+            model_name=bert_model_name,
+            freeze_bert=freeze_bert
+        )
+
+        # Enable output of all hidden states
+        self.bert_absa.bert_embedding.output_hidden_states = True
+        self.bert_absa.bert_embedding.bert.config.output_hidden_states = True
+
+        bert_hidden_size = self.bert_absa.hidden_size
+
+        # Hierarchical layer indices
+        self.low_layers = [1, 2, 3, 4]
+        self.mid_layers = [5, 6, 7, 8]
+        self.high_layers = [9, 10, 11, 12]
+
+        # Layer projection (將每層平均後投影)
+        self.layer_projection = nn.Linear(bert_hidden_size, hidden_dim)
+
+        # Aspect-guided Attention for each level
+        self.low_attention = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=num_attention_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+
+        self.mid_attention = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=num_attention_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+
+        self.high_attention = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=num_attention_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+
+        # Layer normalization for each level
+        self.low_norm = nn.LayerNorm(hidden_dim)
+        self.mid_norm = nn.LayerNorm(hidden_dim)
+        self.high_norm = nn.LayerNorm(hidden_dim)
+
+        # Final classifier (concatenate all 3 levels)
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim * 3, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_classes)
+        )
+
+    def _get_aspect_mask_from_token_type_ids(
+        self,
+        token_type_ids: torch.Tensor,
+        attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        從 token_type_ids 中提取 aspect 的位置
+        token_type_ids: 0=text, 1=aspect
+        返回: aspect token 的 mask
+        """
+        # aspect tokens: token_type_ids == 1 且 attention_mask == 1
+        aspect_token_mask = (token_type_ids == 1) & (attention_mask == 1)
+        return aspect_token_mask
+
+    def forward(
+        self,
+        pair_input_ids: torch.Tensor,
+        pair_attention_mask: torch.Tensor,
+        pair_token_type_ids: torch.Tensor,
+        aspect_mask: torch.Tensor
+    ):
+        """
+        前向傳播
+
+        使用 BERT sentence-pair 格式：[CLS] text [SEP] aspect [SEP]
+
+        參數:
+            pair_input_ids: [batch, max_aspects, seq_len]
+            pair_attention_mask: [batch, max_aspects, seq_len]
+            pair_token_type_ids: [batch, max_aspects, seq_len] - 區分 text(0) 和 aspect(1)
+            aspect_mask: [batch, max_aspects] - bool，標記有效 aspects
+
+        返回:
+            logits: [batch, max_aspects, num_classes]
+            extras: dict with attention info
+        """
+        batch_size, max_aspects, seq_len = pair_input_ids.shape
+
+        logits_list = []
+
+        for i in range(max_aspects):
+            if aspect_mask[:, i].any():
+                input_ids = pair_input_ids[:, i, :]
+                attention_mask = pair_attention_mask[:, i, :]
+                token_type_ids = pair_token_type_ids[:, i, :]
+
+                # Get BERT outputs with all hidden states
+                outputs = self.bert_absa.bert_embedding.bert(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    return_dict=True
+                )
+
+                all_hidden_states = outputs.hidden_states
+
+                # 提取各層級的平均特徵 (對整個序列)
+                # Low-level features
+                low_states = torch.stack([all_hidden_states[idx] for idx in self.low_layers], dim=0)
+                low_seq = low_states.mean(dim=0)  # [batch, seq_len, hidden]
+
+                # Mid-level features
+                mid_states = torch.stack([all_hidden_states[idx] for idx in self.mid_layers], dim=0)
+                mid_seq = mid_states.mean(dim=0)
+
+                # High-level features
+                high_states = torch.stack([all_hidden_states[idx] for idx in self.high_layers], dim=0)
+                high_seq = high_states.mean(dim=0)
+
+                # Project to hidden_dim
+                low_seq = self.layer_projection(low_seq)   # [batch, seq_len, hidden_dim]
+                mid_seq = self.layer_projection(mid_seq)
+                high_seq = self.layer_projection(high_seq)
+
+                # 獲取 aspect token 的表示作為 query
+                aspect_token_mask = self._get_aspect_mask_from_token_type_ids(token_type_ids, attention_mask)
+
+                # 獲取 aspect tokens 的平均表示，使用最高層的表示作為 aspect query
+                # 對每個樣本獨立處理，避免 batch 級別的全 0 檢查
+                aspect_count = aspect_token_mask.sum(dim=1, keepdim=True).float()  # [batch, 1]
+                has_aspect = (aspect_count > 0).unsqueeze(-1)  # [batch, 1, 1]
+
+                # 計算 aspect 平均表示
+                aspect_features = high_seq * aspect_token_mask.unsqueeze(-1).float()
+                aspect_sum = aspect_features.sum(dim=1, keepdim=True)  # [batch, 1, hidden]
+                aspect_avg = aspect_sum / aspect_count.clamp(min=1).unsqueeze(-1)  # [batch, 1, hidden_dim]
+
+                # 對於沒有 aspect token 的樣本，使用 [CLS] token
+                cls_query = high_seq[:, 0:1, :]  # [batch, 1, hidden_dim]
+                aspect_query = torch.where(has_aspect, aspect_avg, cls_query)
+
+                # Key padding mask for attention (True = ignore)
+                key_padding_mask = ~attention_mask.bool()
+
+                # 確保至少有一個位置不被 mask（避免 attention 全為 0 導致 NaN）
+                # 如果全被 mask，則不使用 key_padding_mask
+                all_masked = key_padding_mask.all(dim=1, keepdim=True)  # [batch, 1]
+                if all_masked.any():
+                    # 對於全 mask 的樣本，設置 key_padding_mask 為全 False
+                    key_padding_mask = key_padding_mask & ~all_masked
+
+                # Aspect-guided Attention for each level
+                # Low-level: 詞彙/句法特徵
+                low_attended, _ = self.low_attention(
+                    query=aspect_query,
+                    key=low_seq,
+                    value=low_seq,
+                    key_padding_mask=key_padding_mask
+                )
+                low_fused = self.low_norm(low_attended.squeeze(1))  # [batch, hidden_dim]
+
+                # Mid-level: 語義特徵
+                mid_attended, _ = self.mid_attention(
+                    query=aspect_query,
+                    key=mid_seq,
+                    value=mid_seq,
+                    key_padding_mask=key_padding_mask
+                )
+                mid_fused = self.mid_norm(mid_attended.squeeze(1))
+
+                # High-level: 任務特徵
+                high_attended, _ = self.high_attention(
+                    query=aspect_query,
+                    key=high_seq,
+                    value=high_seq,
+                    key_padding_mask=key_padding_mask
+                )
+                high_fused = self.high_norm(high_attended.squeeze(1))
+
+                # 防止 NaN：將 NaN 替換為 0
+                if torch.isnan(low_fused).any() or torch.isnan(mid_fused).any() or torch.isnan(high_fused).any():
+                    low_fused = torch.nan_to_num(low_fused, nan=0.0)
+                    mid_fused = torch.nan_to_num(mid_fused, nan=0.0)
+                    high_fused = torch.nan_to_num(high_fused, nan=0.0)
+
+                # Concatenate all levels (固定拼接)
+                hierarchical_repr = torch.cat([low_fused, mid_fused, high_fused], dim=-1)
+
+                # Classification
+                logit = self.classifier(hierarchical_repr)
+                logits_list.append(logit)
+            else:
+                logits_list.append(
+                    torch.zeros(batch_size, self.num_classes, device=pair_input_ids.device)
+                )
+
+        logits = torch.stack(logits_list, dim=1)
+
+        extras = {'model_type': 'aspect_aware'}
 
         return logits, extras
 
@@ -1234,15 +1421,23 @@ class UnifiedHIARN(BaseModel):
         # Count valid aspects per sample (用於統計)
         num_valid_aspects = aspect_mask.sum(dim=1)  # [batch]
 
-        # === Step 1: Extract hierarchical features for all aspects ===
+        # === Step 1: Extract hierarchical features for valid aspects only ===
+        # 與獨立 HierarchicalBERT 一致：只對有效 aspect 提取特徵
         all_hierarchical_features = []
 
         for i in range(max_aspects):
-            input_ids = pair_input_ids[:, i, :]
-            attention_mask = pair_attention_mask[:, i, :]
-
-            features = self._extract_hierarchical_features(input_ids, attention_mask)
-            all_hierarchical_features.append(features)
+            if aspect_mask[:, i].any():
+                # 有效 aspect: 提取階層特徵
+                input_ids = pair_input_ids[:, i, :]
+                attention_mask = pair_attention_mask[:, i, :]
+                features = self._extract_hierarchical_features(input_ids, attention_mask)
+                all_hierarchical_features.append(features)
+            else:
+                # 無效 aspect: 用零向量填充 (與 HierarchicalBERT 一致)
+                zero_features = torch.zeros(
+                    batch_size, self.hidden_dim * 3, device=device
+                )
+                all_hierarchical_features.append(zero_features)
 
         # Stack: [batch, max_aspects, hidden*3]
         hierarchical_features = torch.stack(all_hierarchical_features, dim=1)
@@ -1383,6 +1578,14 @@ def create_improved_model(
             max_aspects=max_aspects,
             multi_aspect_threshold=multi_aspect_threshold
         )
+    elif model_type == 'aspect_aware':
+        return HierarchicalBERT_AspectAware(
+            bert_model_name=bert_model_name,
+            freeze_bert=freeze_bert,
+            hidden_dim=hidden_dim,
+            num_classes=num_classes,
+            dropout=dropout
+        )
     else:
         raise ValueError(f"Unknown improved model type: {model_type}. "
-                        f"Choose from: 'hierarchical', 'hierarchical_layerattn', 'iarn', 'vp_iarn', 'hsa', 'unified_hiarn'")
+                        f"Choose from: 'hierarchical', 'hierarchical_layerattn', 'aspect_aware', 'iarn', 'vp_iarn', 'hsa', 'unified_hiarn'")
