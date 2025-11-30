@@ -615,5 +615,261 @@ def get_combined_loss_function(
     return cls_loss_fn, contrastive_loss_fn
 
 
+class KnowledgeDistillationLoss(nn.Module):
+    """
+    Knowledge Distillation Loss for Multi-Aspect ABSA
+
+    結合 hard label loss 和 soft label loss（從 Claude 學習）
+
+    公式：
+        L = (1-α) * L_hard + α * L_soft
+        L_hard = CrossEntropy(pred, hard_label)
+        L_soft = KL(pred_soft, teacher_soft) * T^2
+
+    Args:
+        alpha: soft label 的權重（0.0-1.0），默認 0.3
+        temperature: 軟化 temperature，較高值產生更平滑的分布
+        virtual_weight: 虛擬 aspect 的權重
+    """
+
+    def __init__(self, alpha: float = 0.3, temperature: float = 2.0, virtual_weight: float = 0.5):
+        super(KnowledgeDistillationLoss, self).__init__()
+        self.alpha = alpha
+        self.temperature = temperature
+        self.virtual_weight = virtual_weight
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        hard_labels: torch.Tensor,
+        soft_labels: torch.Tensor,
+        aspect_mask: torch.Tensor,
+        is_virtual: torch.Tensor = None
+    ) -> torch.Tensor:
+        """
+        計算知識蒸餾損失
+
+        Args:
+            logits: [batch, max_aspects, num_classes] - 模型輸出
+            hard_labels: [batch, max_aspects] - ground truth 標籤
+            soft_labels: [batch, max_aspects, num_classes] - Claude soft labels
+            aspect_mask: [batch, max_aspects] - 有效 aspect mask
+            is_virtual: [batch, max_aspects] - 虛擬 aspect 標記
+
+        Returns:
+            loss: scalar
+        """
+        batch_size, max_aspects, num_classes = logits.shape
+        device = logits.device
+
+        # Flatten
+        logits_flat = logits.view(-1, num_classes)
+        hard_labels_flat = hard_labels.view(-1)
+        soft_labels_flat = soft_labels.view(-1, num_classes)
+        aspect_mask_flat = aspect_mask.view(-1)
+
+        # Valid mask (非 padding 且有效)
+        valid_mask = (hard_labels_flat != -100) & aspect_mask_flat
+
+        if valid_mask.sum() == 0:
+            return torch.tensor(0.0, device=device, requires_grad=True)
+
+        # 取出有效樣本
+        valid_logits = logits_flat[valid_mask]
+        valid_hard_labels = hard_labels_flat[valid_mask]
+        valid_soft_labels = soft_labels_flat[valid_mask]
+
+        # ============= Hard Label Loss =============
+        hard_loss = F.cross_entropy(valid_logits, valid_hard_labels, reduction='none')
+
+        # ============= Soft Label Loss (KL Divergence) =============
+        # 軟化 logits
+        soft_logits = valid_logits / self.temperature
+        soft_targets = valid_soft_labels
+
+        # 計算 KL divergence: KL(teacher || student)
+        # 使用 log_softmax 和 softmax 計算
+        log_probs = F.log_softmax(soft_logits, dim=-1)
+
+        # KL(P||Q) = sum(P * log(P/Q)) = sum(P * log(P)) - sum(P * log(Q))
+        # 這裡 P = soft_targets (teacher), Q = model output
+        soft_loss = F.kl_div(
+            log_probs,
+            soft_targets,
+            reduction='none'
+        ).sum(dim=-1)  # [num_valid]
+
+        # 乘以 T^2 來平衡梯度
+        soft_loss = soft_loss * (self.temperature ** 2)
+
+        # ============= 組合損失 =============
+        combined_loss = (1 - self.alpha) * hard_loss + self.alpha * soft_loss
+
+        # ============= Virtual Aspect Weighting =============
+        if is_virtual is not None:
+            is_virtual_flat = is_virtual.view(-1)[valid_mask]
+            weights = torch.ones_like(combined_loss)
+            weights[is_virtual_flat] = self.virtual_weight
+            combined_loss = combined_loss * weights
+
+        return combined_loss.mean()
+
+
+class MultiAspectDistillationLoss(nn.Module):
+    """
+    Multi-Aspect 知識蒸餾損失（結合 Focal Loss）
+
+    支持：
+    - Focal Loss 作為 hard label loss
+    - KL divergence 作為 soft label loss
+    - 可選的 class weighting
+
+    Args:
+        alpha: soft label 權重
+        temperature: 蒸餾溫度
+        focal_gamma: Focal Loss 的 gamma 參數
+        class_weights: 類別權重
+        virtual_weight: 虛擬 aspect 權重
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.3,
+        temperature: float = 2.0,
+        focal_gamma: float = 2.0,
+        class_weights: list = None,
+        virtual_weight: float = 0.5
+    ):
+        super(MultiAspectDistillationLoss, self).__init__()
+        self.alpha = alpha
+        self.temperature = temperature
+        self.focal_gamma = focal_gamma
+        self.virtual_weight = virtual_weight
+
+        # Class weights for focal loss
+        if class_weights is not None:
+            self.class_weights = torch.tensor(class_weights)
+        else:
+            self.class_weights = None
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        hard_labels: torch.Tensor,
+        soft_labels: torch.Tensor,
+        aspect_mask: torch.Tensor,
+        is_virtual: torch.Tensor = None
+    ) -> torch.Tensor:
+        """
+        計算組合損失
+
+        Args:
+            logits: [batch, max_aspects, num_classes]
+            hard_labels: [batch, max_aspects]
+            soft_labels: [batch, max_aspects, num_classes]
+            aspect_mask: [batch, max_aspects]
+            is_virtual: [batch, max_aspects]
+
+        Returns:
+            loss: scalar
+        """
+        batch_size, max_aspects, num_classes = logits.shape
+        device = logits.device
+
+        # Flatten
+        logits_flat = logits.view(-1, num_classes)
+        hard_labels_flat = hard_labels.view(-1)
+        soft_labels_flat = soft_labels.view(-1, num_classes)
+        aspect_mask_flat = aspect_mask.view(-1)
+
+        # Valid mask
+        valid_mask = (hard_labels_flat != -100) & aspect_mask_flat
+
+        if valid_mask.sum() == 0:
+            return torch.tensor(0.0, device=device, requires_grad=True)
+
+        valid_logits = logits_flat[valid_mask]
+        valid_hard_labels = hard_labels_flat[valid_mask]
+        valid_soft_labels = soft_labels_flat[valid_mask]
+
+        # ============= Focal Loss (Hard Label) =============
+        probs = F.softmax(valid_logits, dim=-1)
+        labels_one_hot = F.one_hot(valid_hard_labels, num_classes).float()
+        p_t = (probs * labels_one_hot).sum(dim=-1)
+
+        focal_weight = (1 - p_t) ** self.focal_gamma
+        ce_loss = -torch.log(p_t + 1e-8)
+        hard_loss = focal_weight * ce_loss
+
+        # Apply class weights
+        if self.class_weights is not None:
+            if self.class_weights.device != device:
+                self.class_weights = self.class_weights.to(device)
+            alpha_t = self.class_weights[valid_hard_labels]
+            hard_loss = alpha_t * hard_loss
+
+        # ============= Soft Label Loss (KL Divergence) =============
+        soft_logits = valid_logits / self.temperature
+        log_probs = F.log_softmax(soft_logits, dim=-1)
+
+        soft_loss = F.kl_div(
+            log_probs,
+            valid_soft_labels,
+            reduction='none'
+        ).sum(dim=-1) * (self.temperature ** 2)
+
+        # ============= 組合 =============
+        combined_loss = (1 - self.alpha) * hard_loss + self.alpha * soft_loss
+
+        # Virtual weighting
+        if is_virtual is not None:
+            is_virtual_flat = is_virtual.view(-1)[valid_mask]
+            weights = torch.ones_like(combined_loss)
+            weights[is_virtual_flat] = self.virtual_weight
+            combined_loss = combined_loss * weights
+
+        return combined_loss.mean()
+
+
+def get_distillation_loss_function(
+    alpha: float = 0.3,
+    temperature: float = 2.0,
+    use_focal: bool = True,
+    focal_gamma: float = 2.0,
+    class_weights: list = None,
+    virtual_weight: float = 0.5
+):
+    """
+    Factory function 創建知識蒸餾損失函數
+
+    Args:
+        alpha: soft label 權重 (0.0 = 純 hard label, 1.0 = 純 soft label)
+        temperature: 蒸餾溫度
+        use_focal: 是否使用 Focal Loss 作為 hard label loss
+        focal_gamma: Focal Loss gamma
+        class_weights: 類別權重
+        virtual_weight: 虛擬 aspect 權重
+
+    Returns:
+        loss function
+    """
+    print(f"  [Knowledge Distillation] alpha={alpha}, T={temperature}, focal={use_focal}")
+
+    if use_focal:
+        return MultiAspectDistillationLoss(
+            alpha=alpha,
+            temperature=temperature,
+            focal_gamma=focal_gamma,
+            class_weights=class_weights,
+            virtual_weight=virtual_weight
+        )
+    else:
+        return KnowledgeDistillationLoss(
+            alpha=alpha,
+            temperature=temperature,
+            virtual_weight=virtual_weight
+        )
+
+
 if __name__ == '__main__':
     test_focal_loss()

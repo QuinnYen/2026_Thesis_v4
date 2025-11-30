@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.amp import autocast, GradScaler
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, DebertaV2Tokenizer
 import argparse
 from pathlib import Path
 import sys
@@ -36,7 +36,7 @@ from data.memd_multiaspect import load_memd_data
 from data.multiaspect_dataset import create_multiaspect_dataloaders
 from models.bert_embedding import BERTForABSA
 from models.base_model import BaseModel
-from utils.focal_loss import get_loss_function, get_combined_loss_function, MultiAspectContrastiveLoss
+from utils.focal_loss import get_loss_function, get_combined_loss_function, MultiAspectContrastiveLoss, get_distillation_loss_function
 from utils.dataset_analyzer import analyze_dataset, print_dataset_stats
 from utils.model_selector import select_model, get_model_config, print_selection_result
 
@@ -45,6 +45,47 @@ from experiments.baselines import create_baseline
 
 # Import improved models
 from experiments.improved_models import create_improved_model
+
+
+def load_soft_labels(soft_labels_file: str, dataset: str) -> dict:
+    """
+    載入 Claude soft labels
+
+    Args:
+        soft_labels_file: soft labels JSON 文件名（相對於 data/soft_labels/）
+        dataset: 數據集名稱（用於自動推斷文件名）
+
+    Returns:
+        dict: {(text, aspect): soft_label} 的映射
+    """
+    project_root = Path(__file__).parent.parent
+
+    # 確定文件路徑
+    if soft_labels_file:
+        soft_labels_path = project_root / 'data' / 'soft_labels' / soft_labels_file
+    else:
+        # 自動推斷文件名
+        soft_labels_path = project_root / 'data' / 'soft_labels' / f'{dataset}_soft_labels.json'
+
+    if not soft_labels_path.exists():
+        print(f"  [Warning] Soft labels file not found: {soft_labels_path}")
+        print(f"  [Warning] Please run: python data/claude_soft_labels.py --dataset {dataset}")
+        return None
+
+    print(f"  [Distillation] Loading soft labels from: {soft_labels_path.name}")
+
+    with open(soft_labels_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    # 建立 (text, aspect) -> soft_label 的映射
+    soft_labels_map = {}
+    for sample in data.get('samples', []):
+        key = (sample['text'], sample['aspect'])
+        soft_labels_map[key] = sample['soft_label']
+
+    print(f"  [Distillation] Loaded {len(soft_labels_map)} soft labels")
+
+    return soft_labels_map
 
 
 def generate_training_visualizations(results, save_dir):
@@ -269,6 +310,29 @@ def generate_training_visualizations(results, save_dir):
     report_lines.append(f"    Neutral:  {test_f1_per_class[1]:.4f}")
     report_lines.append(f"    Positive: {test_f1_per_class[2]:.4f}")
     report_lines.append("")
+
+    # 混淆矩陣（文字格式）
+    if 'confusion_matrix' in test_metrics:
+        cm = test_metrics['confusion_matrix']
+        cm_array = np.array(cm)
+        report_lines.append("Confusion Matrix:")
+        report_lines.append("                  Predicted")
+        report_lines.append("                  Neg      Neu      Pos")
+        report_lines.append(f"  Actual Neg     {cm_array[0,0]:>5}    {cm_array[0,1]:>5}    {cm_array[0,2]:>5}")
+        report_lines.append(f"  Actual Neu     {cm_array[1,0]:>5}    {cm_array[1,1]:>5}    {cm_array[1,2]:>5}")
+        report_lines.append(f"  Actual Pos     {cm_array[2,0]:>5}    {cm_array[2,1]:>5}    {cm_array[2,2]:>5}")
+        report_lines.append("")
+        # 計算每類的 Precision, Recall
+        report_lines.append("Per-class Metrics:")
+        class_names = ['Negative', 'Neutral', 'Positive']
+        for i, name in enumerate(class_names):
+            tp = cm_array[i, i]
+            fn = cm_array[i, :].sum() - tp  # 實際為 i 但預測錯誤
+            fp = cm_array[:, i].sum() - tp  # 預測為 i 但實際不是
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            report_lines.append(f"  {name:10s}: Precision={precision:.4f}, Recall={recall:.4f}")
+        report_lines.append("")
 
     # Gate統計（如果有）
     if 'gate_stats' in test_metrics and test_metrics['gate_stats'] is not None:
@@ -530,9 +594,11 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     num_batches = 0
     all_gates = []  # 收集所有gate值
     layer_attention_weights = None  # 收集 HBL 的 layer attention 權重
+    all_branch_weights = []  # 收集 AH-IARN 的分支權重
+    hsa_level_weights = None  # 收集 HSA 層級權重
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating", ascii=True):
+        for batch in tqdm(dataloader, desc="Evaluating", ascii=True, leave=False):
             # 使用新的 sentence-pair 格式
             pair_ids = batch['pair_input_ids'].to(device)
             pair_mask = batch['pair_attention_mask'].to(device)
@@ -544,19 +610,33 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
             # Forward with sentence-pair format
             logits, extras = model(pair_ids, pair_mask, pair_type_ids, aspect_mask)
 
-            # 收集 gate 統計（PMAC 模組）或 layer attention（HBL 模組）
+            # 收集 gate 統計（PMAC 模組）或 layer attention（HBL 模組）或 branch weights（AH-IARN）
             if extras is not None:
-                if isinstance(extras, dict) and 'layer_attention' in extras:
+                if isinstance(extras, dict):
                     # HBL 模型：收集 layer attention 權重
-                    if layer_attention_weights is None:
-                        layer_attention_weights = extras['layer_attention']
+                    if 'layer_attention' in extras:
+                        if layer_attention_weights is None:
+                            layer_attention_weights = extras['layer_attention']
+                    # AH-IARN 模型：收集分支權重
+                    if 'branch_weights' in extras:
+                        all_branch_weights.append(extras['branch_weights'])
+                    # 收集 HSA 層級權重
+                    if 'hsa_level_weights' in extras and hsa_level_weights is None:
+                        hsa_level_weights = extras['hsa_level_weights']
                 elif collect_gates:
                     # PMAC 模型：收集 gate 值
                     all_gates.extend(extras.cpu().numpy().flatten().tolist())
 
             # 計算 loss（與訓練時使用相同的 loss 函數）
             if loss_fn is not None and args is not None:
-                if args.loss_type != 'ce':
+                if args.loss_type == 'distill':
+                    # 蒸餾模式驗證時：使用不帶 soft labels 的 focal loss
+                    # 因為驗證集沒有 soft labels，且評估時只關心 hard label 的準確度
+                    batch_loss = compute_multi_aspect_loss(
+                        logits, labels, aspect_mask, is_virtual,
+                        virtual_weight=args.virtual_weight
+                    )
+                elif args.loss_type != 'ce':
                     # 使用 Focal Loss 或其他損失
                     batch_loss = loss_fn(logits, labels, aspect_mask, is_virtual)
                 else:
@@ -568,8 +648,43 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
                 total_loss += batch_loss.item()
                 num_batches += 1
 
-            # 預測
-            preds = torch.argmax(logits, dim=-1)  # [batch, max_aspects]
+            # 預測 - 支持非對稱 Logit 調整 (Asymmetric Logit Adjustment)
+            #
+            # 策略說明：
+            #   1. neutral_boost: 提升 Neutral logits，解決 Neu→Pos/Neu→Neg 誤判
+            #   2. neg_suppress:  抑制 Negative logits，解決 Neu→Neg 誤判（筆電領域）
+            #   3. pos_suppress:  抑制 Positive logits，解決 Neu→Pos 誤判（餐廳領域）
+            #
+            # 領域特性：
+            #   - 筆電領域：主要問題是 Neu→Neg，使用 neg_suppress
+            #   - 餐廳領域：Yelp 正向偏誤導致 Neu→Pos，使用 pos_suppress
+            #
+            # 數學效果：
+            #   調整後 logits: [L_Neg - neg_suppress, L_Neu + neutral_boost, L_Pos - pos_suppress]
+            #
+            neutral_boost = getattr(args, 'neutral_boost', 0.0) if args else 0.0
+            neg_suppress = getattr(args, 'neg_suppress', 0.0) if args else 0.0
+            pos_suppress = getattr(args, 'pos_suppress', 0.0) if args else 0.0
+
+            if neutral_boost != 0.0 or neg_suppress != 0.0 or pos_suppress != 0.0:
+                # 複製 logits 避免修改原始值
+                adjusted_logits = logits.clone()
+
+                # 1. 提升 Neutral (通用)
+                if neutral_boost > 0:
+                    adjusted_logits[:, :, 1] = adjusted_logits[:, :, 1] + neutral_boost
+
+                # 2. 抑制 Negative (解決 Neu→Neg，筆電領域)
+                if neg_suppress > 0:
+                    adjusted_logits[:, :, 0] = adjusted_logits[:, :, 0] - neg_suppress
+
+                # 3. 抑制 Positive (解決 Neu→Pos，餐廳領域)
+                if pos_suppress > 0:
+                    adjusted_logits[:, :, 2] = adjusted_logits[:, :, 2] - pos_suppress
+
+                preds = torch.argmax(adjusted_logits, dim=-1)
+            else:
+                preds = torch.argmax(logits, dim=-1)  # [batch, max_aspects]
             probs = torch.softmax(logits, dim=-1)  # [batch, max_aspects, num_classes] 用於 AUC
 
             # 直接展開為 aspect-level（過濾無效和虛擬 aspects）
@@ -649,6 +764,41 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     if layer_attention_weights is not None:
         result['layer_attention'] = layer_attention_weights.tolist()
 
+    # 加入 AH-IARN 分支權重統計
+    if all_branch_weights:
+        # numpy 已經在文件開頭導入
+        # 拼接所有批次的分支權重: [num_batches, batch, max_aspects, 3]
+        # 需要計算平均權重
+        all_weights = []
+        for batch_weights in all_branch_weights:
+            # batch_weights: [batch, max_aspects, 3]
+            if isinstance(batch_weights, torch.Tensor):
+                batch_weights = batch_weights.numpy()
+            # 展平為 [num_valid_aspects, 3]
+            for sample_weights in batch_weights:
+                # sample_weights: [max_aspects, 3]
+                for aspect_weights in sample_weights:
+                    # 過濾掉全零的（無效 aspect）
+                    if np.sum(aspect_weights) > 0:
+                        all_weights.append(aspect_weights)
+
+        if all_weights:
+            all_weights = np.array(all_weights)  # [num_valid, 3]
+            avg_weights = np.mean(all_weights, axis=0)  # [3]
+            result['branch_weights'] = {
+                'Hierarchical': float(avg_weights[0]),
+                'HSA': float(avg_weights[1]),
+                'IARN': float(avg_weights[2])
+            }
+
+    # 加入 HSA 層級權重
+    if hsa_level_weights is not None:
+        result['hsa_level_weights'] = {
+            'Token': float(hsa_level_weights[0]),
+            'Phrase': float(hsa_level_weights[1]),
+            'Clause': float(hsa_level_weights[2])
+        }
+
     # 加入混淆矩陣（用於視覺化）
     if return_confusion_matrix:
         from sklearn.metrics import confusion_matrix
@@ -703,6 +853,22 @@ def train_multiaspect_model(args):
         dir_path.mkdir(parents=True, exist_ok=True)
 
     print(f"  Output: {exp_dir.name}")
+
+    # ========== HKGAN v2.0: 處理 Confidence Gate 和 Domain 參數 ==========
+    # 如果使用 --no_confidence_gate，覆蓋 use_confidence_gate
+    if args.no_confidence_gate:
+        args.use_confidence_gate = False
+
+    # 自動推斷 domain（如果未指定）
+    if args.domain is None and args.improved == 'hkgan':
+        # 根據數據集名稱自動設置領域
+        if args.dataset in ['laptops', 'lap16']:
+            args.domain = 'laptops'
+            print(f"  [HKGAN] Auto-detected domain: laptops")
+        elif args.dataset in ['restaurants', 'rest16', 'mams']:
+            args.domain = 'restaurants'
+            print(f"  [HKGAN] Auto-detected domain: restaurants")
+        # 其他數據集不設置 domain（不啟用領域過濾）
 
     # 加載數據
 
@@ -791,13 +957,28 @@ def train_multiaspect_model(args):
         train_path = project_root / 'data' / 'raw' / 'semeval2014' / train_xml
         test_path = project_root / 'data' / 'raw' / 'semeval2014' / test_xml
 
-        # 增強數據路徑 (Neutral augmentation)
+        # 增強數據路徑 (Neutral augmentation) - 支持 JSON 和 XML 格式
         augmented_neutral_path = None
         if use_augmented:
-            aug_path = project_root / 'data' / 'augmented' / f'{args.dataset}_neutral_augmented.xml'
-            if aug_path.exists():
-                augmented_neutral_path = str(aug_path)
-                print(f"  [Augmentation] 找到增強數據: {aug_path.name}")
+            # 優先使用 JSON 格式 (新版 Claude 增強)
+            aug_path_json = project_root / 'data' / 'augmented' / f'{args.dataset}_neutral_augmented.json'
+            aug_path_xml = project_root / 'data' / 'augmented' / f'{args.dataset}_neutral_augmented.xml'
+
+            if aug_path_json.exists():
+                augmented_neutral_path = str(aug_path_json)
+                print(f"  [Augmentation] 找到增強數據: {aug_path_json.name}")
+            elif aug_path_xml.exists():
+                augmented_neutral_path = str(aug_path_xml)
+                print(f"  [Augmentation] 找到增強數據: {aug_path_xml.name}")
+
+        # Self-Training 偽標籤數據路徑
+        pseudo_labeled_path = None
+        use_self_training = getattr(args, 'use_self_training', False)
+        if use_self_training:
+            pseudo_path = project_root / 'data' / 'pseudo_labeled' / f'{args.dataset}_pseudo.json'
+            if pseudo_path.exists():
+                pseudo_labeled_path = str(pseudo_path)
+                print(f"  [Self-Training] 找到偽標籤數據: {pseudo_path.name}")
 
         train_all_samples, test_samples = load_multiaspect_data(
             train_path=str(train_path),
@@ -806,7 +987,8 @@ def train_multiaspect_model(args):
             max_aspects=args.max_aspects,
             include_single_aspect=args.include_single_aspect,
             virtual_aspect_mode=args.virtual_aspect_mode,
-            augmented_neutral_path=augmented_neutral_path
+            augmented_neutral_path=augmented_neutral_path,
+            pseudo_labeled_path=pseudo_labeled_path
         )
 
         # 分割驗證集 (SemEval-2014 only)
@@ -854,8 +1036,24 @@ def train_multiaspect_model(args):
         if args.dropout == 0.1:  # 使用默認值時才覆蓋
             args.dropout = recommended_config['dropout']
 
-    # 加載 tokenizer 和創建 DataLoaders
-    tokenizer = AutoTokenizer.from_pretrained(args.bert_model)
+    # 加載 tokenizer (DeBERTa-v3 需要使用 slow tokenizer 以避免兼容性問題)
+    if 'deberta-v3' in args.bert_model.lower():
+        tokenizer = DebertaV2Tokenizer.from_pretrained(args.bert_model)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(args.bert_model)
+
+    # 如果是知識蒸餾模式，載入 soft labels
+    soft_labels_dict = None
+    if args.loss_type == 'distill':
+        soft_labels_dict = load_soft_labels(
+            soft_labels_file=getattr(args, 'soft_labels_file', None),
+            dataset=args.dataset
+        )
+        if soft_labels_dict is None:
+            print("  [Warning] Falling back to focal loss (no soft labels)")
+            args.loss_type = 'focal'
+
+    # 創建 DataLoaders
     train_loader, val_loader, test_loader = create_multiaspect_dataloaders(
         train_samples=train_samples,
         val_samples=val_samples,
@@ -864,7 +1062,8 @@ def train_multiaspect_model(args):
         batch_size=args.batch_size,
         max_text_len=args.max_text_len,
         max_aspect_len=args.max_aspect_len,
-        max_num_aspects=args.max_aspects
+        max_num_aspects=args.max_aspects,
+        soft_labels_dict=soft_labels_dict
     )
 
     # 創建模型
@@ -884,17 +1083,18 @@ def train_multiaspect_model(args):
         ).to(device)
     else:
         print(f"Creating Model: {args.improved}")
-        # 獲取配置中的閾值參數 (如果有)
+        # 獲取配置中的參數 (如果有)
         multi_aspect_threshold = getattr(args, 'multi_aspect_threshold', 0.5)
+        selection_mode = getattr(args, 'selection_mode', 'soft')
+        num_attention_heads = getattr(args, 'num_attention_heads', 4)
+        num_syntax_layers = getattr(args, 'num_syntax_layers', 2)
+        router_type = getattr(args, 'router_type', 'confidence')
+        freeze_experts = getattr(args, 'freeze_experts', False)
+
         model = create_improved_model(
             model_type=args.improved,
-            bert_model_name=args.bert_model,
-            freeze_bert=args.freeze_bert,
-            hidden_dim=args.hidden_dim,
-            num_classes=3,
-            dropout=args.dropout,
-            use_contrastive=use_contrastive,  # 傳遞對比學習設定
-            multi_aspect_threshold=multi_aspect_threshold  # 傳遞閾值
+            args=args,
+            num_classes=3
         ).to(device)
 
         # 如果是 Unified-HIARN，計算多面向比例並設置模式
@@ -908,6 +1108,8 @@ def train_multiaspect_model(args):
     print(f"  BERT: {args.bert_model} | Dropout: {args.dropout}")
     if use_contrastive:
         print(f"  Contrastive Learning: weight={args.contrastive_weight}, temp={args.contrastive_temperature}")
+    if args.neutral_boost != 0.0:
+        print(f"  Neutral Boost: +{args.neutral_boost} (logit offset for Neutral class)")
 
     # 優化器 (支援 LLRD)
     if args.use_llrd:
@@ -1008,7 +1210,45 @@ def train_multiaspect_model(args):
                 logits, extras = model(pair_ids, pair_mask, pair_type_ids, aspect_mask)
 
                 # Loss
-                if args.loss_type != 'ce':
+                if args.loss_type == 'distill':
+                    # 知識蒸餾損失
+                    soft_labels = batch['soft_labels'].to(device)
+
+                    if 'distill_loss_fn' not in locals():
+                        # 決定 class weights
+                        if args.auto_class_weights:
+                            from utils.focal_loss import compute_dynamic_class_weights
+                            class_weights = compute_dynamic_class_weights(train_samples)
+                            print(f"  [Distill] Class weights: {class_weights}")
+                        else:
+                            class_weights = args.class_weights
+
+                        distill_loss_fn = get_distillation_loss_function(
+                            alpha=getattr(args, 'distill_alpha', 0.3),
+                            temperature=getattr(args, 'distill_temperature', 2.0),
+                            use_focal=True,
+                            focal_gamma=args.focal_gamma,
+                            class_weights=class_weights,
+                            virtual_weight=args.virtual_weight
+                        ).to(device)
+
+                        # 創建對比損失函數（如果啟用）
+                        if use_contrastive and 'contrastive_loss_fn' not in locals():
+                            contrastive_loss_fn = MultiAspectContrastiveLoss(
+                                temperature=args.contrastive_temperature,
+                                contrastive_weight=args.contrastive_weight
+                            ).to(device)
+
+                    loss = distill_loss_fn(logits, labels, soft_labels, aspect_mask, is_virtual)
+
+                    # 添加對比損失（如果啟用且模型提供特徵）
+                    if use_contrastive and extras is not None and 'features' in extras:
+                        contrastive_loss = contrastive_loss_fn(
+                            extras['features'], labels, aspect_mask
+                        )
+                        loss = loss + contrastive_loss
+
+                elif args.loss_type != 'ce':
                     # 使用 Focal Loss 或 Adaptive Loss
                     if 'loss_fn' not in locals():
                         # 決定 class weights
@@ -1096,10 +1336,19 @@ def train_multiaspect_model(args):
                 'lr': f'{current_lr:.2e}'
             })
 
+        # 關閉進度條，避免輸出混亂
+        progress_bar.close()
+
         avg_train_loss = train_loss / train_steps
 
         # 驗證階段 - 傳入 loss_fn 和 args 以計算 validation loss
-        loss_fn_for_eval = loss_fn if args.loss_type != 'ce' else None
+        # 對於 distillation，驗證時使用 focal loss (不使用 soft labels)
+        if args.loss_type == 'distill':
+            loss_fn_for_eval = distill_loss_fn if 'distill_loss_fn' in locals() else None
+        elif args.loss_type != 'ce':
+            loss_fn_for_eval = loss_fn if 'loss_fn' in locals() else None
+        else:
+            loss_fn_for_eval = None
         val_metrics = evaluate_multi_aspect(model, val_loader, device, loss_fn_for_eval, args)
 
         # 記錄歷史數據
@@ -1166,6 +1415,11 @@ def train_multiaspect_model(args):
         w = test_metrics['layer_attention']
         print(f"  Layer Weights: Low={w[0]:.3f} Mid={w[1]:.3f} High={w[2]:.3f}")
 
+    # AH-IARN 分支權重（如果有）
+    if 'branch_weights' in test_metrics:
+        bw = test_metrics['branch_weights']
+        print(f"  Branch Weights: Hier={bw['Hierarchical']:.3f} HSA={bw['HSA']:.3f} IARN={bw['IARN']:.3f}")
+
     # 保存結果
     results = {
         'args': vars(args),
@@ -1178,6 +1432,12 @@ def train_multiaspect_model(args):
     # 單獨保存 layer_attention 到頂層，方便報告生成器讀取
     if 'layer_attention' in test_metrics:
         results['layer_attention'] = test_metrics['layer_attention']
+
+    # 單獨保存 branch_weights 和 hsa_level_weights 到頂層
+    if 'branch_weights' in test_metrics:
+        results['branch_weights'] = test_metrics['branch_weights']
+    if 'hsa_level_weights' in test_metrics:
+        results['hsa_level_weights'] = test_metrics['hsa_level_weights']
 
     # 保存結果到時間戳資料夾
     results_path = reports_dir / 'experiment_results.json'
@@ -1251,9 +1511,11 @@ def main():
                                  'memd_laptop', 'memd_restaurant'],
                         help='數據集選擇 (restaurants, laptops, mams, rest16, lap16, 或 memd_* 系列)')
     parser.add_argument('--use_augmented', action='store_true', default=False,
-                        help='使用增強數據集 (EDA Augmentation)')
+                        help='使用增強數據集 (Claude Augmentation)')
     parser.add_argument('--augmented_dir', type=str, default=None,
                         help='增強數據目錄（若不指定，自動根據 dataset 設置）')
+    parser.add_argument('--use_self_training', action='store_true', default=False,
+                        help='使用 Self-Training 偽標籤數據')
     parser.add_argument('--min_aspects', type=int, default=2,
                         help='最小 aspect 數量（用於過濾）')
     parser.add_argument('--max_aspects', type=int, default=8,
@@ -1275,13 +1537,15 @@ def main():
                         choices=['bert_cls', 'bert_only'],  # bert_only 為向後兼容
                         help='使用 baseline 模型 (bert_cls: 標準BERT-CLS baseline)')
     parser.add_argument('--improved', type=str, default=None,
-                        choices=['hierarchical', 'hierarchical_layerattn', 'aspect_aware', 'iarn', 'vp_iarn', 'hsa', 'unified_hiarn'],
+                        choices=['hierarchical', 'hierarchical_layerattn', 'aspect_aware', 'iarn', 'vp_iarn', 'hsa', 'hkgan'],
                         help='使用改進模型:\n'
-                             '  - hierarchical: Hierarchical BERT (適合單面向為主)\n'
-                             '  - aspect_aware: Aspect-aware Pooling (使用 aspect 做 attention query)\n'
-                             '  - iarn: Inter-Aspect Relation Network (適合多面向為主)\n'
-                             '  - hsa: Hierarchical Syntax Attention (階層式語法注意力)\n'
-                             '  - unified_hiarn: Unified-HIARN (動態融合 Hierarchical + IARN)')
+                             '  - hierarchical: Hierarchical BERT (基礎階層模型)\n'
+                             '  - hierarchical_layerattn: Hierarchical BERT with Layer Attention\n'
+                             '  - aspect_aware: Aspect-aware Hierarchical BERT\n'
+                             '  - iarn: Inter-Aspect Relation Network\n'
+                             '  - vp_iarn: VP-IARN (向量投影 + IARN)\n'
+                             '  - hsa: Hierarchical Syntax Attention (aspect_aware 別名)\n'
+                             '  - hkgan: Hierarchical Knowledge-enhanced GAT Network (推薦)')
     parser.add_argument('--auto_select', action='store_true',
                         help='根據數據集特徵自動選擇最佳模型 (Hierarchical BERT 或 IARN)')
 
@@ -1296,6 +1560,33 @@ def main():
                         help='Dropout 比率')
     parser.add_argument('--multi_aspect_threshold', type=float, default=0.5,
                         help='Unified-HIARN: 多面向比例閾值 (>閾值使用IARN, <=閾值使用Hierarchical)')
+
+    # Adaptive Hierarchical Net 參數
+    parser.add_argument('--selection_mode', type=str, default='soft',
+                        choices=['soft', 'hard'],
+                        help='Adaptive Hierarchical: 分支選擇模式 (soft=加權組合, hard=Gumbel-Softmax硬選擇)')
+    parser.add_argument('--num_attention_heads', type=int, default=4,
+                        help='IARN/Adaptive: Multi-head attention 頭數')
+    parser.add_argument('--num_syntax_layers', type=int, default=2,
+                        help='HSA/Adaptive: 語法傳播層數')
+
+    # HKGAN (Hierarchical Knowledge-enhanced GAT) 參數
+    parser.add_argument('--gat_heads', type=int, default=4,
+                        help='HKGAN: GAT 注意力頭數')
+    parser.add_argument('--gat_layers', type=int, default=2,
+                        help='HKGAN: GAT 層數')
+    parser.add_argument('--knowledge_weight', type=float, default=0.1,
+                        help='HKGAN: SenticNet 知識注入權重')
+    parser.add_argument('--use_senticnet', action='store_true', default=True,
+                        help='HKGAN: 是否使用 SenticNet 知識增強')
+
+    # HKGAN v2.0 新增：Neutral 識別改進
+    parser.add_argument('--use_confidence_gate', action='store_true', default=True,
+                        help='HKGAN: 是否使用信心門控（動態調整 SenticNet 注入強度）')
+    parser.add_argument('--no_confidence_gate', action='store_true', default=False,
+                        help='HKGAN: 禁用信心門控')
+    parser.add_argument('--domain', type=str, default=None,
+                        help='HKGAN: 領域名稱，用於領域過濾（如不指定，將自動根據數據集推斷）')
 
     # 訓練參數
     parser.add_argument('--batch_size', type=int, default=16,
@@ -1319,8 +1610,8 @@ def main():
     parser.add_argument('--warmup_ratio', type=float, default=0.1,
                         help='Warmup 步數比例（總步數的百分比）')
     parser.add_argument('--loss_type', type=str, default='ce',
-                        choices=['ce', 'focal', 'adaptive'],
-                        help='Loss function type: ce (CrossEntropy), focal (FocalLoss), adaptive (AdaptiveWeighted)')
+                        choices=['ce', 'focal', 'adaptive', 'distill'],
+                        help='Loss function type: ce (CrossEntropy), focal (FocalLoss), adaptive (AdaptiveWeighted), distill (Knowledge Distillation)')
     parser.add_argument('--focal_gamma', type=float, default=2.0,
                         help='Focal loss gamma parameter (default: 2.0, 0=CE)')
     parser.add_argument('--label_smoothing', type=float, default=0.0,
@@ -1343,6 +1634,22 @@ def main():
                         help='啟用 Layer-wise Learning Rate Decay')
     parser.add_argument('--llrd_decay', type=float, default=0.95,
                         help='LLRD 衰減係數 (default: 0.95，每往下一層 LR 乘上此係數)')
+
+    # 非對稱 Logit 調整 (推理時)
+    parser.add_argument('--neutral_boost', type=float, default=0.0,
+                        help='Neutral logits 偏移量 (解決 Neu→Pos, 推薦 0.5~1.0)')
+    parser.add_argument('--neg_suppress', type=float, default=0.0,
+                        help='Negative logits 抑制量 (解決 Neu→Neg, 筆電領域推薦 0.3~0.8)')
+    parser.add_argument('--pos_suppress', type=float, default=0.0,
+                        help='Positive logits 抑制量 (解決 Neu→Pos, 餐廳領域推薦 0.5~1.0)')
+
+    # 知識蒸餾參數 (Knowledge Distillation)
+    parser.add_argument('--distill_alpha', type=float, default=0.3,
+                        help='Soft label 權重 (0.0=純 hard label, 1.0=純 soft label, 推薦 0.2-0.4)')
+    parser.add_argument('--distill_temperature', type=float, default=2.0,
+                        help='蒸餾溫度 (較高值產生更平滑的分布, 推薦 2.0-4.0)')
+    parser.add_argument('--soft_labels_file', type=str, default=None,
+                        help='Soft labels JSON 文件路徑 (相對於 data/soft_labels/)')
 
     args = parser.parse_args()
 

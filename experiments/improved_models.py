@@ -1220,372 +1220,102 @@ class VP_IARN(BaseModel):
         return logits, extras
 
 
-class UnifiedHIARN(BaseModel):
+# ============================================================
+# Factory Function
+# ============================================================
+
+def create_improved_model(model_type, args, num_classes=3):
     """
-    Unified Hierarchical-IARN (Unified-HIARN)
+    創建改進模型的工廠函數
 
-    核心創新：統一模型，根據**數據集**的多面向比例自動選擇策略
-
-    設計理念：
-        - 數據集級別策略選擇（非樣本級別）
-        - 多面向比例 > 閾值: 使用 IARN (aspect 間交互)
-        - 多面向比例 <= 閾值: 使用 Hierarchical (純階層特徵)
-
-    架構：
-        1. 數據加載時計算多面向比例
-        2. 根據閾值選擇 mode: 'hierarchical' 或 'iarn'
-        3. Hierarchical 分支與獨立 HierarchicalBERT 完全一致
-        4. IARN 分支與獨立 IARN 完全一致
-
-    預期效果：
-        - Restaurants/Laptops (多面向<50%): 自動使用 Hierarchical
-        - MAMS (多面向=100%): 自動使用 IARN
-        - 統一模型，無需手動選擇，結果與對應獨立模型一致
-    """
-
-    def __init__(
-        self,
-        bert_model_name: str = 'bert-base-uncased',
-        freeze_bert: bool = False,
-        hidden_dim: int = 768,
-        num_classes: int = 3,
-        dropout: float = 0.1,
-        num_attention_heads: int = 4,
-        max_aspects: int = 8,
-        multi_aspect_threshold: float = 0.5  # 多面向比例閾值
-    ):
-        super(UnifiedHIARN, self).__init__()
-
-        self.hidden_dim = hidden_dim
-        self.num_classes = num_classes
-        self.num_attention_heads = num_attention_heads
-        self.max_aspects = max_aspects
-        self.multi_aspect_threshold = multi_aspect_threshold
-
-        # 運行時決定的模式 (在 set_mode 中設置)
-        self._mode = None  # 'hierarchical' or 'iarn'
-        self._multi_aspect_ratio = None
-
-        # BERT with hierarchical output
-        self.bert_absa = BERTForABSA(
-            model_name=bert_model_name,
-            freeze_bert=freeze_bert
-        )
-
-        # Enable output of all hidden states
-        self.bert_absa.bert_embedding.output_hidden_states = True
-        self.bert_absa.bert_embedding.bert.config.output_hidden_states = True
-
-        bert_hidden_size = self.bert_absa.hidden_size
-
-        # Hierarchical layer indices (BERT: 12 layers)
-        self.low_layers = [1, 2, 3, 4]
-        self.mid_layers = [5, 6, 7, 8]
-        self.high_layers = [9, 10, 11, 12]
-
-        # === Hierarchical Branch (與獨立 HierarchicalBERT 完全一致) ===
-        # 使用 concat 而非 mean，與獨立模型一致
-        self.low_fusion = nn.Sequential(
-            nn.Linear(bert_hidden_size * len(self.low_layers), hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout)
-        )
-
-        self.mid_fusion = nn.Sequential(
-            nn.Linear(bert_hidden_size * len(self.mid_layers), hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout)
-        )
-
-        self.high_fusion = nn.Sequential(
-            nn.Linear(bert_hidden_size * len(self.high_layers), hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout)
-        )
-
-        # === IARN Branch: Aspect-to-Aspect Attention ===
-        self.aspect_attention = nn.MultiheadAttention(
-            embed_dim=hidden_dim * 3,  # Concatenated Low+Mid+High
-            num_heads=num_attention_heads,
-            dropout=dropout,
-            batch_first=True
-        )
-
-        # IARN Relation-aware Gating
-        self.iarn_gate = nn.Sequential(
-            nn.Linear(hidden_dim * 3 * 2, hidden_dim),  # [self; context]
-            nn.Tanh(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid()
-        )
-
-        # === Final Classifier (共用) ===
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim * 3, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_classes)
-        )
-
-    def set_mode(self, multi_aspect_ratio: float):
-        """
-        根據數據集的多面向比例設置運行模式
-
-        Args:
-            multi_aspect_ratio: 多面向樣本佔比 (0.0 - 1.0)
-        """
-        self._multi_aspect_ratio = multi_aspect_ratio
-
-        if multi_aspect_ratio > self.multi_aspect_threshold:
-            self._mode = 'iarn'
-            print(f"  [Unified-HIARN] Mode: IARN (multi-aspect ratio: {multi_aspect_ratio:.2%} > {self.multi_aspect_threshold:.0%})")
-        else:
-            self._mode = 'hierarchical'
-            print(f"  [Unified-HIARN] Mode: Hierarchical (multi-aspect ratio: {multi_aspect_ratio:.2%} <= {self.multi_aspect_threshold:.0%})")
-
-    def _extract_hierarchical_features(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        提取階層特徵 (與獨立 HierarchicalBERT 完全一致)
-
-        使用 concat 而非 mean，確保與獨立模型結果一致
-        """
-        # Get BERT outputs
-        outputs = self.bert_absa.bert_embedding.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            return_dict=True
-        )
-
-        all_hidden_states = outputs.hidden_states
-
-        # Extract [CLS] token from different layers (使用 concat)
-        low_features = []
-        for layer_idx in self.low_layers:
-            low_features.append(all_hidden_states[layer_idx][:, 0, :])  # CLS token
-        low_features = torch.cat(low_features, dim=-1)  # [batch, hidden*4]
-
-        mid_features = []
-        for layer_idx in self.mid_layers:
-            mid_features.append(all_hidden_states[layer_idx][:, 0, :])
-        mid_features = torch.cat(mid_features, dim=-1)
-
-        high_features = []
-        for layer_idx in self.high_layers:
-            high_features.append(all_hidden_states[layer_idx][:, 0, :])
-        high_features = torch.cat(high_features, dim=-1)
-
-        # Hierarchical fusion (與獨立模型一致)
-        low_fused = self.low_fusion(low_features)   # [batch, hidden_dim]
-        mid_fused = self.mid_fusion(mid_features)   # [batch, hidden_dim]
-        high_fused = self.high_fusion(high_features) # [batch, hidden_dim]
-
-        # Concatenate all levels
-        return torch.cat([low_fused, mid_fused, high_fused], dim=-1)  # [batch, hidden*3]
-
-    def forward(
-        self,
-        pair_input_ids: torch.Tensor,
-        pair_attention_mask: torch.Tensor,
-        pair_token_type_ids: torch.Tensor,
-        aspect_mask: torch.Tensor
-    ):
-        """
-        前向傳播 - 根據預設模式選擇策略
-
-        參數：
-            pair_input_ids: [batch, max_aspects, seq_len]
-            pair_attention_mask: [batch, max_aspects, seq_len]
-            pair_token_type_ids: [batch, max_aspects, seq_len]
-            aspect_mask: [batch, max_aspects] - bool
-
-        返回：
-            logits: [batch, max_aspects, num_classes]
-            extras: dict with mode info
-        """
-        # 默認使用 hierarchical 模式
-        if self._mode is None:
-            self._mode = 'hierarchical'
-
-        batch_size, max_aspects, seq_len = pair_input_ids.shape
-        device = pair_input_ids.device
-
-        # Count valid aspects per sample (用於統計)
-        num_valid_aspects = aspect_mask.sum(dim=1)  # [batch]
-
-        # === Step 1: Extract hierarchical features for valid aspects only ===
-        # 與獨立 HierarchicalBERT 一致：只對有效 aspect 提取特徵
-        all_hierarchical_features = []
-
-        for i in range(max_aspects):
-            if aspect_mask[:, i].any():
-                # 有效 aspect: 提取階層特徵
-                input_ids = pair_input_ids[:, i, :]
-                attention_mask = pair_attention_mask[:, i, :]
-                features = self._extract_hierarchical_features(input_ids, attention_mask)
-                all_hierarchical_features.append(features)
-            else:
-                # 無效 aspect: 用零向量填充 (與 HierarchicalBERT 一致)
-                zero_features = torch.zeros(
-                    batch_size, self.hidden_dim * 3, device=device
-                )
-                all_hierarchical_features.append(zero_features)
-
-        # Stack: [batch, max_aspects, hidden*3]
-        hierarchical_features = torch.stack(all_hierarchical_features, dim=1)
-
-        # === Step 2: 根據模式選擇特徵 ===
-        if self._mode == 'iarn':
-            # IARN 模式: 使用 aspect 間交互
-            attn_mask = ~aspect_mask  # True for invalid aspects
-
-            context_features, attn_weights = self.aspect_attention(
-                query=hierarchical_features,
-                key=hierarchical_features,
-                value=hierarchical_features,
-                key_padding_mask=attn_mask,
-                need_weights=True,
-                average_attn_weights=True
-            )
-
-            # IARN gating
-            iarn_combined = torch.cat([hierarchical_features, context_features], dim=-1)
-            iarn_gate_values = self.iarn_gate(iarn_combined)  # [batch, max_aspects, 1]
-            final_features = iarn_gate_values * hierarchical_features + (1 - iarn_gate_values) * context_features
-
-            extras = {
-                'aspect_attention_weights': attn_weights.detach().cpu(),
-                'iarn_gate_values': iarn_gate_values.squeeze(-1).detach().cpu(),
-                'mode': 'iarn',
-                'multi_aspect_ratio': self._multi_aspect_ratio,
-                'n_multi_aspect_samples': (num_valid_aspects >= 2).sum().item(),
-                'n_single_aspect_samples': (num_valid_aspects == 1).sum().item()
-            }
-        else:
-            # Hierarchical 模式: 純階層特徵 (與獨立 HierarchicalBERT 一致)
-            final_features = hierarchical_features
-
-            extras = {
-                'mode': 'hierarchical',
-                'multi_aspect_ratio': self._multi_aspect_ratio,
-                'n_multi_aspect_samples': (num_valid_aspects >= 2).sum().item(),
-                'n_single_aspect_samples': (num_valid_aspects == 1).sum().item()
-            }
-
-        # === Step 3: Classification ===
-        logits = self.classifier(final_features)  # [batch, max_aspects, num_classes]
-
-        # Mask out invalid aspects
-        logits = logits.masked_fill(~aspect_mask.unsqueeze(-1), 0.0)
-
-        return logits, extras
-
-
-def create_improved_model(
-    model_type: str,
-    bert_model_name: str = 'bert-base-uncased',
-    freeze_bert: bool = False,
-    hidden_dim: int = 768,
-    num_classes: int = 3,
-    dropout: float = 0.1,
-    **kwargs
-):
-    """
-    工廠函數：創建改進模型
+    支援的模型類型:
+    - 'hierarchical': HierarchicalBERT (基礎階層模型)
+    - 'hierarchical_layerattn': HierarchicalBERT_LayerAttn (層級注意力)
+    - 'aspect_aware': HierarchicalBERT_AspectAware (面向感知)
+    - 'iarn': InterAspectRelationNetwork (面向間關係網絡)
+    - 'vp_iarn': VP_IARN (向量投影 + IARN)
+    - 'hsa': HierarchicalBERT_AspectAware (別名)
 
     Args:
-        model_type: 模型類型
-            - 'hierarchical': Hierarchical BERT (固定拼接)
-            - 'hierarchical_layerattn': HBL (Layer-wise Attention)
-            - 'iarn': Inter-Aspect Relation Network
-            - 'vp_iarn': VP-IARN (向量投影增強的 IARN)
-            - 'hsa': Hierarchical Syntax Attention (階層式語法注意力)
-            - 'unified_hiarn': Unified-HIARN (統一 Hierarchical + IARN)
-        bert_model_name: BERT 模型名稱
-        freeze_bert: 是否凍結 BERT
-        hidden_dim: 隱藏層維度
-        num_classes: 類別數量
-        dropout: Dropout 比率
-        **kwargs: 其他參數
-            - num_syntax_layers: HSA 語法層數 (default: 2)
-            - use_contrastive: 是否啟用對比學習 (default: False)
-            - max_aspects: 最大 aspect 數量 (default: 8)
+        model_type: 模型類型字串
+        args: 命令行參數
+        num_classes: 分類類別數
 
     Returns:
-        改進模型實例
+        對應的模型實例
     """
-    use_contrastive = kwargs.get('use_contrastive', False)
-    max_aspects = kwargs.get('max_aspects', 8)
+    bert_model = getattr(args, 'bert_model', 'bert-base-uncased')
+    hidden_dim = getattr(args, 'hidden_dim', 256)
+    dropout = getattr(args, 'dropout', 0.3)
 
     if model_type == 'hierarchical':
         return HierarchicalBERT(
-            bert_model_name=bert_model_name,
-            freeze_bert=freeze_bert,
+            bert_model_name=bert_model,
             hidden_dim=hidden_dim,
             num_classes=num_classes,
             dropout=dropout,
-            use_contrastive=use_contrastive
+            freeze_bert=getattr(args, 'freeze_bert', False)
         )
+
     elif model_type == 'hierarchical_layerattn':
         return HierarchicalBERT_LayerAttn(
-            bert_model_name=bert_model_name,
-            freeze_bert=freeze_bert,
+            bert_model_name=bert_model,
             hidden_dim=hidden_dim,
             num_classes=num_classes,
-            dropout=dropout
+            dropout=dropout,
+            freeze_bert=getattr(args, 'freeze_bert', False)
         )
+
+    elif model_type in ['aspect_aware', 'hsa']:
+        return HierarchicalBERT_AspectAware(
+            bert_model_name=bert_model,
+            hidden_dim=hidden_dim,
+            num_classes=num_classes,
+            dropout=dropout,
+            freeze_bert=getattr(args, 'freeze_bert', False),
+            num_heads=getattr(args, 'num_attention_heads', 4)
+        )
+
     elif model_type == 'iarn':
         return InterAspectRelationNetwork(
-            bert_model_name=bert_model_name,
-            freeze_bert=freeze_bert,
+            bert_model_name=bert_model,
             hidden_dim=hidden_dim,
             num_classes=num_classes,
-            dropout=dropout
+            dropout=dropout,
+            freeze_bert=getattr(args, 'freeze_bert', False),
+            num_heads=getattr(args, 'iarm_heads', 4),
+            num_layers=getattr(args, 'iarm_layers', 2)
         )
+
     elif model_type == 'vp_iarn':
         return VP_IARN(
-            bert_model_name=bert_model_name,
-            freeze_bert=freeze_bert,
-            hidden_dim=hidden_dim,
-            num_classes=num_classes,
-            dropout=dropout
-        )
-    elif model_type == 'hsa':
-        return create_hsa_model(
-            bert_model_name=bert_model_name,
-            freeze_bert=freeze_bert,
+            bert_model_name=bert_model,
             hidden_dim=hidden_dim,
             num_classes=num_classes,
             dropout=dropout,
-            num_syntax_layers=kwargs.get('num_syntax_layers', 2)
+            freeze_bert=getattr(args, 'freeze_bert', False),
+            num_heads=getattr(args, 'iarm_heads', 4),
+            num_layers=getattr(args, 'iarm_layers', 2)
         )
-    elif model_type == 'unified_hiarn':
-        multi_aspect_threshold = kwargs.get('multi_aspect_threshold', 0.5)
-        return UnifiedHIARN(
-            bert_model_name=bert_model_name,
-            freeze_bert=freeze_bert,
+
+    elif model_type == 'hkgan':
+        from models.hkgan import HKGAN
+        return HKGAN(
+            bert_model_name=bert_model,
             hidden_dim=hidden_dim,
             num_classes=num_classes,
             dropout=dropout,
-            max_aspects=max_aspects,
-            multi_aspect_threshold=multi_aspect_threshold
+            freeze_bert=getattr(args, 'freeze_bert', False),
+            num_gat_heads=getattr(args, 'gat_heads', 4),
+            num_gat_layers=getattr(args, 'gat_layers', 2),
+            knowledge_weight=getattr(args, 'knowledge_weight', 0.1),
+            use_senticnet=getattr(args, 'use_senticnet', True),
+            # v2.0 新增：解決 Neutral 識別問題
+            use_confidence_gate=getattr(args, 'use_confidence_gate', True),
+            domain=getattr(args, 'domain', None)
         )
-    elif model_type == 'aspect_aware':
-        return HierarchicalBERT_AspectAware(
-            bert_model_name=bert_model_name,
-            freeze_bert=freeze_bert,
-            hidden_dim=hidden_dim,
-            num_classes=num_classes,
-            dropout=dropout
-        )
+
     else:
-        raise ValueError(f"Unknown improved model type: {model_type}. "
-                        f"Choose from: 'hierarchical', 'hierarchical_layerattn', 'aspect_aware', 'iarn', 'vp_iarn', 'hsa', 'unified_hiarn'")
+        raise ValueError(f"不支援的模型類型: {model_type}。"
+                        f"支援的類型: hierarchical, hierarchical_layerattn, "
+                        f"aspect_aware, hsa, iarn, vp_iarn, hkgan")

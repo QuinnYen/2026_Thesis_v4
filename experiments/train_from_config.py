@@ -30,8 +30,14 @@ def load_config(config_path):
     return config
 
 
-def config_to_args(config):
-    """將 YAML 配置轉換為命令行參數"""
+def config_to_args(config, dataset=None):
+    """
+    將 YAML 配置轉換為命令行參數
+
+    Args:
+        config: YAML 配置字典
+        dataset: 資料集名稱，用於選擇對應的 bert_model
+    """
     args = []
 
     # 自動選擇模式
@@ -49,7 +55,15 @@ def config_to_args(config):
             args.extend(['--improved', model_cfg['improved']])
 
         if model_cfg.get('bert_model'):
-            args.extend(['--bert_model', model_cfg['bert_model']])
+            bert_model = model_cfg['bert_model']
+            # 支援對應表格式：根據 dataset 選擇對應的模型
+            if isinstance(bert_model, dict):
+                if dataset and dataset in bert_model:
+                    bert_model = bert_model[dataset]
+                else:
+                    bert_model = bert_model.get('default', 'bert-base-uncased')
+                print(f"[Config] 根據資料集 '{dataset}' 選擇 bert_model: {bert_model}")
+            args.extend(['--bert_model', bert_model])
 
         if model_cfg.get('freeze_bert'):
             args.append('--freeze_bert')
@@ -86,9 +100,32 @@ def config_to_args(config):
             if 'iarm_layers' in model_cfg:
                 args.extend(['--iarm_layers', str(model_cfg['iarm_layers'])])
 
-        # Unified-HIARN 參數
-        if 'multi_aspect_threshold' in model_cfg:
-            args.extend(['--multi_aspect_threshold', str(model_cfg['multi_aspect_threshold'])])
+        # Attention 參數
+        if 'num_attention_heads' in model_cfg:
+            args.extend(['--num_attention_heads', str(model_cfg['num_attention_heads'])])
+
+        # HKGAN 參數
+        if 'gat_heads' in model_cfg:
+            args.extend(['--gat_heads', str(model_cfg['gat_heads'])])
+
+        if 'gat_layers' in model_cfg:
+            args.extend(['--gat_layers', str(model_cfg['gat_layers'])])
+
+        if 'knowledge_weight' in model_cfg:
+            args.extend(['--knowledge_weight', str(model_cfg['knowledge_weight'])])
+
+        if model_cfg.get('use_senticnet'):
+            args.append('--use_senticnet')
+
+        # HKGAN v2.0 新增：Neutral 識別改進
+        if 'use_confidence_gate' in model_cfg:
+            if model_cfg['use_confidence_gate']:
+                args.append('--use_confidence_gate')
+            else:
+                args.append('--no_confidence_gate')
+
+        if 'domain' in model_cfg and model_cfg['domain']:
+            args.extend(['--domain', model_cfg['domain']])
 
     # 數據配置
     if 'data' in config:
@@ -97,6 +134,9 @@ def config_to_args(config):
         # 數據增強配置
         if data_cfg.get('use_augmented'):
             args.append('--use_augmented')
+
+        if data_cfg.get('use_self_training'):
+            args.append('--use_self_training')
 
         if 'augmented_dir' in data_cfg:
             args.extend(['--augmented_dir', data_cfg['augmented_dir']])
@@ -195,6 +235,61 @@ def config_to_args(config):
         if 'llrd_decay' in train_cfg:
             args.extend(['--llrd_decay', str(train_cfg['llrd_decay'])])
 
+        # 非對稱 Logit 調整 (推理時)
+        # 支援對應表格式：根據 dataset 選擇對應的值
+        if 'neutral_boost' in train_cfg:
+            neutral_boost = train_cfg['neutral_boost']
+            if isinstance(neutral_boost, dict):
+                if dataset and dataset in neutral_boost:
+                    neutral_boost = neutral_boost[dataset]
+                else:
+                    neutral_boost = neutral_boost.get('default', 0.0)
+                print(f"[Config] 根據資料集 '{dataset}' 選擇 neutral_boost: {neutral_boost}")
+            args.extend(['--neutral_boost', str(neutral_boost)])
+
+        if 'neg_suppress' in train_cfg:
+            neg_suppress = train_cfg['neg_suppress']
+            if isinstance(neg_suppress, dict):
+                if dataset and dataset in neg_suppress:
+                    neg_suppress = neg_suppress[dataset]
+                else:
+                    neg_suppress = neg_suppress.get('default', 0.0)
+                print(f"[Config] 根據資料集 '{dataset}' 選擇 neg_suppress: {neg_suppress}")
+            args.extend(['--neg_suppress', str(neg_suppress)])
+
+        if 'pos_suppress' in train_cfg:
+            pos_suppress = train_cfg['pos_suppress']
+            if isinstance(pos_suppress, dict):
+                if dataset and dataset in pos_suppress:
+                    pos_suppress = pos_suppress[dataset]
+                else:
+                    pos_suppress = pos_suppress.get('default', 0.0)
+                print(f"[Config] 根據資料集 '{dataset}' 選擇 pos_suppress: {pos_suppress}")
+            args.extend(['--pos_suppress', str(pos_suppress)])
+
+    # 知識蒸餾配置
+    if 'distillation' in config:
+        distill_cfg = config['distillation']
+
+        if distill_cfg.get('enabled'):
+            # 啟用蒸餾時，loss_type 設為 distill
+            if '--loss_type' not in args:
+                args.extend(['--loss_type', 'distill'])
+
+        if 'alpha' in distill_cfg:
+            args.extend(['--distill_alpha', str(distill_cfg['alpha'])])
+
+        if 'temperature' in distill_cfg:
+            args.extend(['--distill_temperature', str(distill_cfg['temperature'])])
+
+        if 'soft_labels_file' in distill_cfg:
+            args.extend(['--soft_labels_file', distill_cfg['soft_labels_file']])
+
+        # 蒸餾配置中的 focal 設定
+        if 'use_focal' in distill_cfg and distill_cfg['use_focal']:
+            if 'focal_gamma' in distill_cfg:
+                args.extend(['--focal_gamma', str(distill_cfg['focal_gamma'])])
+
     return args
 
 
@@ -221,8 +316,8 @@ def main():
 
     config = load_config(config_path)
 
-    # 轉換為命令行參數
-    train_args = config_to_args(config)
+    # 轉換為命令行參數（傳入 dataset 以選擇對應的 bert_model）
+    train_args = config_to_args(config, dataset=args.dataset)
 
     # 添加 dataset 參數（必須）
     train_args.extend(['--dataset', args.dataset])

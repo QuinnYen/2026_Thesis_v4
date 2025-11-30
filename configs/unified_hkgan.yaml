@@ -1,0 +1,156 @@
+# HKGAN: Hierarchical Knowledge-enhanced Graph Attention Network (v3.0)
+# 核心創新：階層式 BERT + SenticNet 知識 + 純 PyTorch GAT + 跨面向建模
+#
+# v3.0 新增（解決 MAMS 複雜句問題）：
+#   - 動態知識門控 (Dynamic Knowledge Gating)：根據 BERT 上下文動態決定是否信任 SenticNet
+#   - 解決 v2.x 的「硬性注入」問題：
+#     * 舊版：Feature_new = Feature_BERT + λ * SenticNet（固定權重）
+#     * 新版：Gate = Sigmoid(Linear([BERT, SenticNet]))
+#             Feature_new = (1 - Gate) * BERT + Gate * SenticNet_embed
+#   - 行為：
+#     * 簡單句（Laptops/Restaurants）：Gate 高，利用 SenticNet 增強
+#     * 複雜句（MAMS 轉折句 "But", "However"）：Gate 低，只相信 BERT
+#   - 預期效果：MAMS F1 85%+
+#
+# v2.3（解決蹺蹺板效應）：
+#   - 情感感知隔離 (Sentiment-Aware Isolation)
+#
+# v2.2（解決情感洩漏問題）：
+#   - 情感隔離機制 (Sentiment Isolation)
+#
+# v2.0 功能（解決 Neutral 識別問題）：
+#   - Domain Filtering、Confidence Gating、Coverage Mask
+#
+# 預期性能：
+#   - Restaurants: 78-81% F1
+#   - Laptops: 72-75% F1 (Neutral F1 55%+, Neg F1 73%+)
+#   - MAMS: 84-86% F1
+
+experiment_name: "hkgan"
+
+model:
+  improved: "hkgan"
+  # DAPT 模型對應表：根據資料集自動選擇
+  # 若資料集不在列表中，使用 default
+  bert_model:
+    laptops: "data/dapt/laptop_dapt/final"
+    lap16: "data/dapt/laptop_dapt/final"
+    restaurants: "data/dapt/restaurant_dapt/final"
+    rest16: "data/dapt/restaurant_dapt/final"
+    default: "bert-base-uncased"
+  freeze_bert: false
+  hidden_dim: 768
+  dropout: 0.3
+
+  # GAT 參數
+  gat_heads: 4          # 圖注意力頭數
+  gat_layers: 2         # GAT 層數
+
+  # SenticNet 知識增強
+  use_senticnet: true
+  knowledge_weight: 0.1  # 知識注入權重 (0.05-0.2)
+
+  # ========== Neutral 識別改進（v2.0 新增）==========
+  # 信心門控：讓模型根據上下文動態決定是否信任 SenticNet
+  # 解決問題：技術語境下的通用情感詞會被誤判
+  # 例如："high resolution" 中的 "high" 應被視為中性
+  use_confidence_gate: true
+
+  # ========== 動態知識門控（v3.0 新增）==========
+  # 從「硬性注入」改為「軟性門控」
+  # 解決問題：MAMS 複雜句（含轉折詞）中 SenticNet 與上下文衝突
+  # 例如："The food is great, but the service is terrible"
+  #       "great" 不應影響 "service" 的情感判斷
+  # 行為：模型自動學習何時信任外部知識，何時只相信 BERT
+  use_dynamic_gate: true
+
+  # 領域過濾：針對特定領域的技術術語遮蔽通用情感極性
+  # 可選值：null, "laptops", "restaurants", "mams"
+  # 設為 null 時會自動根據數據集名稱推斷
+  # 注意：在 run_experiments.py 中會根據 dataset 自動設置
+  domain: null  # 將由訓練腳本根據數據集自動設置
+
+  # IARN 參數 (用於跨面向建模)
+  iarm_heads: 4
+
+data:
+  use_augmented: false  # 關閉 Claude 增強
+  use_self_training: false  # Step 0: 先訓練基礎模型
+  min_aspects: 2
+  max_aspects: 8
+  include_single_aspect: true
+  virtual_aspect_mode: "overall"
+  max_text_len: 128
+  max_aspect_len: 10
+
+training:
+  batch_size: 16          # GAT 較耗內存，使用較小 batch
+  accumulation_steps: 2   # 等效 batch_size = 32
+  epochs: 30
+  lr: 3.0e-5  # 提高學習率，與 HAN 一致
+  weight_decay: 0.01
+  grad_clip: 1.0
+  patience: 10
+  seed: 42
+
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 損失函數配置
+  loss_type: "focal"
+  focal_gamma: 2.0        # 提高 gamma，更關注難樣本
+  class_weights: [0.8, 1.8, 0.8]   # 手動設定：大幅提高 Neutral 權重
+
+  virtual_weight: 0.5
+
+  # LLRD (可選)
+  use_llrd: true
+  llrd_decay: 0.95
+
+  # 監督式對比學習 (SCL) - 解決中性類別語義塌陷
+  # 預期效果: Neutral F1 +3%~8%
+  contrastive_weight: 0.1     # 對比損失權重 (0.05-0.2, 0=禁用)
+  contrastive_temperature: 0.07  # 溫度參數 (越小分布越尖銳)
+
+  # ========== 非對稱 Logit 調整 (Asymmetric Logit Adjustment) ==========
+  # 推理時調整 logits，專門解決 Neutral 誤判問題
+  #
+  # 數學效果：
+  #   原本：L_Neg > L_Neu（被誤判為 Neg）
+  #   調整後：(L_Neg - neg_suppress) vs (L_Neu + neutral_boost)
+  #   等效翻轉力 = neutral_boost + neg_suppress
+  #
+  # 優勢：兩個參數分別針對不同錯誤類型，互不干擾
+  #   - neutral_boost 解決 Neu→Pos，不影響 Neg→Neu
+  #   - neg_suppress 解決 Neu→Neg，不影響 Pos→Neu
+  #
+  # 支援資料集對應表：不同領域有不同的類別分布特性
+  #   - Laptops: Neutral 比例高 (~27%)，需要較強的調整
+  #   - Restaurants: Neutral 比例低 (~18%)，從零開始調整
+  #   - MAMS: Neutral 比例高 (~33%)，需要調整
+  #
+  neutral_boost:
+    laptops: 0.8
+    lap16: 0.8
+    restaurants: 0.6      # 餐廳領域：提升 Neutral 識別
+    rest16: 1.0           # REST16 猛藥：Neu F1 只有 35%，需要非常激進的提升
+    mams: 0.0             # MAMS 歸零測試：看模型原始輸出
+    default: 0.0
+
+  neg_suppress:
+    laptops: 0.6
+    lap16: 0.6            # LAP16：與 laptops 一致，0.8 效果反降
+    restaurants: 0.0      # 餐廳領域不需要抑制 Negative
+    rest16: 0.2           # REST16：Neg F1 81.23% 偏高，輕微抑制防止 Neu→Neg
+    mams: 0.0             # MAMS 不需要抑制 Negative
+    default: 0.0
+
+  # pos_suppress: 抑制 Positive logits (解決 Neu→Pos)
+  # 餐廳領域因 Yelp 正向偏誤，需要抑制過度樂觀的 Positive 預測
+  pos_suppress:
+    laptops: 0.0          # 筆電領域不需要抑制 Positive
+    lap16: 0.0
+    restaurants: 0.8      # 餐廳領域：Positive Recall 96.7% 過高，需抑制
+    rest16: 0.5           # REST16：Pos F1 92.83% 過高，中度抑制救回 Neutral
+    mams: 0.0
+    default: 0.0

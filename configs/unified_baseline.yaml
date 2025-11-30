@@ -5,6 +5,8 @@
 #   python run_experiments.py --dataset restaurants
 #   python run_experiments.py --dataset laptops
 #   python run_experiments.py --dataset mams
+#
+# 注意：使用 BERT-base 作為 backbone，與 HKGAN 保持一致
 
 experiment_name: "baseline_bert_cls"
 
