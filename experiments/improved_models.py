@@ -1312,6 +1312,8 @@ def create_improved_model(model_type, args, num_classes=3):
             use_senticnet=getattr(args, 'use_senticnet', True),
             # v2.0 新增：解決 Neutral 識別問題
             use_confidence_gate=getattr(args, 'use_confidence_gate', True),
+            # v3.0 新增：動態知識門控（解決 MAMS 複雜句問題）
+            use_dynamic_gate=getattr(args, 'use_dynamic_gate', True),
             domain=getattr(args, 'domain', None)
         )
 

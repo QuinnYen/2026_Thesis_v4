@@ -59,6 +59,8 @@ def read_metrics(exp_dir):
         'test_f1_neg': None,
         'test_f1_neu': None,
         'test_f1_pos': None,
+        'test_auc_macro': None,      # 新增：AUC (Macro)
+        'test_auc_weighted': None,   # 新增：AUC (Weighted)
         'val_f1': None,
         'best_epoch': None,
         'total_epochs': None,
@@ -97,6 +99,10 @@ def read_metrics(exp_dir):
                     metrics['test_f1_neg'] = f1_per_class[0]
                     metrics['test_f1_neu'] = f1_per_class[1]
                     metrics['test_f1_pos'] = f1_per_class[2]
+
+                # 讀取 AUC
+                metrics['test_auc_macro'] = test_metrics.get('auc_macro')
+                metrics['test_auc_weighted'] = test_metrics.get('auc_weighted')
 
                 # 讀取混淆矩陣
                 metrics['confusion_matrix'] = test_metrics.get('confusion_matrix')
@@ -152,26 +158,28 @@ def generate_report(dataset, baseline_metrics, hkgan_metrics):
     report.append("-" * 80)
     report.append("實驗結果 (Main Results)")
     report.append("-" * 80)
-    report.append(f"{'Model':<20} {'Acc (%)':>12} {'Macro-F1 (%)':>14} {'Best Epoch':>12}")
+    report.append(f"{'Model':<20} {'Acc (%)':>12} {'Macro-F1 (%)':>14} {'AUC (%)':>12} {'Best Epoch':>12}")
     report.append("-" * 80)
 
     # Baseline
     if baseline_metrics and baseline_metrics.get('test_acc'):
         acc = f"{baseline_metrics['test_acc']*100:.2f}"
         f1 = f"{baseline_metrics['test_f1']*100:.2f}" if baseline_metrics.get('test_f1') else "N/A"
+        auc = f"{baseline_metrics['test_auc_macro']*100:.2f}" if baseline_metrics.get('test_auc_macro') else "N/A"
         epoch = f"{baseline_metrics.get('best_epoch', 'N/A')}"
-        report.append(f"{'Baseline (BERT-CLS)':<20} {acc:>12} {f1:>14} {epoch:>12}")
+        report.append(f"{'Baseline (BERT-CLS)':<20} {acc:>12} {f1:>14} {auc:>12} {epoch:>12}")
     else:
-        report.append(f"{'Baseline (BERT-CLS)':<20} {'N/A':>12} {'N/A':>14} {'N/A':>12}")
+        report.append(f"{'Baseline (BERT-CLS)':<20} {'N/A':>12} {'N/A':>14} {'N/A':>12} {'N/A':>12}")
 
     # HKGAN
     if hkgan_metrics and hkgan_metrics.get('test_acc'):
         acc = f"{hkgan_metrics['test_acc']*100:.2f}"
         f1 = f"{hkgan_metrics['test_f1']*100:.2f}" if hkgan_metrics.get('test_f1') else "N/A"
+        auc = f"{hkgan_metrics['test_auc_macro']*100:.2f}" if hkgan_metrics.get('test_auc_macro') else "N/A"
         epoch = f"{hkgan_metrics.get('best_epoch', 'N/A')}"
-        report.append(f"{'HKGAN (Ours)':<20} {acc:>12} {f1:>14} {epoch:>12}")
+        report.append(f"{'HKGAN (Ours)':<20} {acc:>12} {f1:>14} {auc:>12} {epoch:>12}")
     else:
-        report.append(f"{'HKGAN (Ours)':<20} {'N/A':>12} {'N/A':>14} {'N/A':>12}")
+        report.append(f"{'HKGAN (Ours)':<20} {'N/A':>12} {'N/A':>14} {'N/A':>12} {'N/A':>12}")
 
     report.append("-" * 80)
     report.append("")
@@ -275,6 +283,12 @@ def generate_report(dataset, baseline_metrics, hkgan_metrics):
         report.append(f"  Accuracy:  {acc_symbol} {abs(acc_diff):+.2f}%")
         report.append(f"  Macro-F1:  {f1_symbol} {abs(f1_diff):+.2f}%")
 
+        # AUC improvement
+        if baseline_metrics.get('test_auc_macro') and hkgan_metrics.get('test_auc_macro'):
+            auc_diff = (hkgan_metrics['test_auc_macro'] - baseline_metrics['test_auc_macro']) * 100
+            auc_symbol = "↑" if auc_diff > 0 else "↓" if auc_diff < 0 else "="
+            report.append(f"  AUC:       {auc_symbol} {abs(auc_diff):+.2f}%")
+
         # Per-class improvement
         if baseline_metrics.get('test_f1_neg') and hkgan_metrics.get('test_f1_neg'):
             neg_diff = (hkgan_metrics['test_f1_neg'] - baseline_metrics['test_f1_neg']) * 100
@@ -315,7 +329,7 @@ def main():
     reports_dir = Path("results")
 
     if args.all:
-        datasets = ['restaurants', 'laptops', 'mams']
+        datasets = ['restaurants', 'laptops', 'rest16', 'lap16', 'mams']
     elif args.dataset:
         datasets = [args.dataset]
     else:

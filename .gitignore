@@ -18,3 +18,7 @@ __pycache__/
 # Results
 /results/baseline
 /results/improved
+/results/ablation
+*.pt
+*.pth
+*.bin

@@ -40,6 +40,10 @@ def config_to_args(config, dataset=None):
     """
     args = []
 
+    # 實驗名稱（用於決定輸出目錄：ablation 開頭會存到 results/ablation/）
+    if config.get('experiment_name'):
+        args.extend(['--experiment_name', config['experiment_name']])
+
     # 自動選擇模式
     if config.get('auto_select'):
         args.append('--auto_select')
@@ -123,6 +127,13 @@ def config_to_args(config, dataset=None):
                 args.append('--use_confidence_gate')
             else:
                 args.append('--no_confidence_gate')
+
+        # HKGAN v3.0 新增：動態知識門控
+        if 'use_dynamic_gate' in model_cfg:
+            if model_cfg['use_dynamic_gate']:
+                args.append('--use_dynamic_gate')
+            else:
+                args.append('--no_dynamic_gate')
 
         if 'domain' in model_cfg and model_cfg['domain']:
             args.extend(['--domain', model_cfg['domain']])
@@ -307,6 +318,10 @@ def main():
                         help='覆蓋配置的額外參數，例如: --override --epochs 50 --lr 3e-5')
 
     args, unknown = parser.parse_known_args()
+
+    # 將 unknown 參數也加入 override（支援 --override --seed 123 這種形式）
+    if unknown:
+        args.override.extend(unknown)
 
     # 載入配置
     config_path = Path(args.config)

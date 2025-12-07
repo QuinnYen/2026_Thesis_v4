@@ -304,6 +304,10 @@ def generate_training_visualizations(results, save_dir):
     report_lines.append("Test Results:")
     report_lines.append(f"  Accuracy: {test_metrics['accuracy']:.4f}")
     report_lines.append(f"  F1 (Macro): {test_metrics['f1_macro']:.4f}")
+    if test_metrics.get('auc_macro'):
+        report_lines.append(f"  AUC (Macro): {test_metrics['auc_macro']:.4f}")
+    if test_metrics.get('auc_weighted'):
+        report_lines.append(f"  AUC (Weighted): {test_metrics['auc_weighted']:.4f}")
     test_f1_per_class = test_metrics['f1_per_class']
     report_lines.append(f"  F1 per class:")
     report_lines.append(f"    Negative: {test_f1_per_class[0]:.4f}")
@@ -835,11 +839,19 @@ def train_multiaspect_model(args):
         exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
         exp_name += f"_{args.loss_type}"
 
+    # 如果有指定 experiment_name，使用它（消融實驗會用到）
+    if args.experiment_name:
+        exp_name = args.experiment_name
+
     # 時間戳實驗資料夾
     # Baseline 實驗保存在 results/baseline/{dataset}/ 下
+    # Ablation 實驗保存在 results/ablation/{dataset}/ 下
     # Improved 實驗保存在 results/improved/{dataset}/ 下
     if args.baseline:
         exp_dir = project_root / 'results' / 'baseline' / args.dataset / f"{timestamp}_{exp_name}"
+    elif exp_name.startswith('ablation'):
+        # 消融實驗
+        exp_dir = project_root / 'results' / 'ablation' / args.dataset / f"{timestamp}_{exp_name}"
     else:
         # Improved 模型
         exp_dir = project_root / 'results' / 'improved' / args.dataset / f"{timestamp}_{exp_name}"
@@ -854,10 +866,14 @@ def train_multiaspect_model(args):
 
     print(f"  Output: {exp_dir.name}")
 
-    # ========== HKGAN v2.0: 處理 Confidence Gate 和 Domain 參數 ==========
+    # ========== HKGAN v2.0/v3.0: 處理 Confidence Gate、Dynamic Gate 和 Domain 參數 ==========
     # 如果使用 --no_confidence_gate，覆蓋 use_confidence_gate
     if args.no_confidence_gate:
         args.use_confidence_gate = False
+
+    # 如果使用 --no_dynamic_gate，覆蓋 use_dynamic_gate (v3.0)
+    if args.no_dynamic_gate:
+        args.use_dynamic_gate = False
 
     # 自動推斷 domain（如果未指定）
     if args.domain is None and args.improved == 'hkgan':
@@ -1407,7 +1423,8 @@ def train_multiaspect_model(args):
 
     # 簡化的測試結果輸出
     test_f1_class = test_metrics['f1_per_class']
-    print(f"  Acc: {test_metrics['accuracy']:.4f} | F1: {test_metrics['f1_macro']:.4f} "
+    auc_str = f" | AUC: {test_metrics['auc_macro']:.4f}" if test_metrics.get('auc_macro') else ""
+    print(f"  Acc: {test_metrics['accuracy']:.4f} | F1: {test_metrics['f1_macro']:.4f}{auc_str} "
           f"[N:{test_f1_class[0]:.2f} U:{test_f1_class[1]:.2f} P:{test_f1_class[2]:.2f}]")
 
     # HBL layer attention 權重（如果有）
@@ -1479,6 +1496,10 @@ def train_multiaspect_model(args):
         f.write(f"  Best Val F1: {best_val_f1:.4f}\n")
         f.write(f"  Test Accuracy: {test_metrics['accuracy']:.4f}\n")
         f.write(f"  Test F1 (Macro): {test_metrics['f1_macro']:.4f}\n")
+        if test_metrics.get('auc_macro'):
+            f.write(f"  Test AUC (Macro): {test_metrics['auc_macro']:.4f}\n")
+        if test_metrics.get('auc_weighted'):
+            f.write(f"  Test AUC (Weighted): {test_metrics['auc_weighted']:.4f}\n")
         f.write(f"  Test Precision: {test_metrics['precision']:.4f}\n")
         f.write(f"  Test Recall: {test_metrics['recall']:.4f}\n\n")
 
@@ -1501,7 +1522,11 @@ def train_multiaspect_model(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='訓練 Multi-Aspect HMAC-Net')
+    parser = argparse.ArgumentParser(description='訓練 Multi-Aspect HMAC-NET')
+
+    # 實驗名稱（用於決定輸出目錄）
+    parser.add_argument('--experiment_name', type=str, default=None,
+                        help='實驗名稱（ablation 開頭會存到 results/ablation/）')
 
     # 數據參數
     parser.add_argument('--dataset', type=str, required=True,
@@ -1585,6 +1610,10 @@ def main():
                         help='HKGAN: 是否使用信心門控（動態調整 SenticNet 注入強度）')
     parser.add_argument('--no_confidence_gate', action='store_true', default=False,
                         help='HKGAN: 禁用信心門控')
+    parser.add_argument('--use_dynamic_gate', action='store_true', default=True,
+                        help='HKGAN v3.0: 是否使用動態知識門控（解決 MAMS 複雜句問題）')
+    parser.add_argument('--no_dynamic_gate', action='store_true', default=False,
+                        help='HKGAN v3.0: 禁用動態知識門控')
     parser.add_argument('--domain', type=str, default=None,
                         help='HKGAN: 領域名稱，用於領域過濾（如不指定，將自動根據數據集推斷）')
 
