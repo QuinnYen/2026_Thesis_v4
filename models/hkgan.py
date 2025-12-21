@@ -868,6 +868,8 @@ class HKGAN(nn.Module):
         use_senticnet: bool = True,
         use_confidence_gate: bool = True,
         use_dynamic_gate: bool = True,
+        use_inter_aspect: bool = True,
+        use_hierarchical_features: bool = True,
         domain: str = None
     ):
         super().__init__()
@@ -878,6 +880,8 @@ class HKGAN(nn.Module):
         self.knowledge_weight = knowledge_weight
         self.use_confidence_gate = use_confidence_gate
         self.use_dynamic_gate = use_dynamic_gate
+        self.use_inter_aspect = use_inter_aspect
+        self.use_hierarchical_features = use_hierarchical_features
         self.domain = domain
 
         # ========== 1. BERT Encoder ==========
@@ -1197,11 +1201,20 @@ class HKGAN(nn.Module):
         flat_input_ids = pair_input_ids.view(-1, seq_len)
         flat_attention_mask = pair_attention_mask.view(-1, seq_len)
 
-        # 1. 一次性提取所有 aspects 的階層式 BERT 特徵
-        low_feat, mid_feat, high_feat, _ = self._extract_hierarchical_features(
-            flat_input_ids, flat_attention_mask
-        )
-        # 結果: [batch * max_aspects, seq_len, hidden_dim]
+        # 1. 提取 BERT 特徵
+        if self.use_hierarchical_features:
+            # 一次性提取所有 aspects 的階層式 BERT 特徵
+            low_feat, mid_feat, high_feat, _ = self._extract_hierarchical_features(
+                flat_input_ids, flat_attention_mask
+            )
+            # 結果: [batch * max_aspects, seq_len, hidden_dim]
+        else:
+            # 只使用最後一層 BERT 特徵（消融實驗用）
+            _, _, high_feat, _ = self._extract_hierarchical_features(
+                flat_input_ids, flat_attention_mask
+            )
+            low_feat = high_feat
+            mid_feat = high_feat
 
         # 2. 獲取 SenticNet 極性和覆蓋掩碼（已優化為向量化操作）
         polarities, coverage_mask = self._get_polarities(flat_input_ids)
@@ -1226,17 +1239,19 @@ class HKGAN(nn.Module):
         high_pooled = self._aspect_pooling(high_gat, flat_attention_mask)
         # 結果: [batch * max_aspects, hidden_dim]
 
-        weighted_features = (
-            weights[0] * low_pooled +
-            weights[1] * mid_pooled +
-            weights[2] * high_pooled
-        )
-
-        concat_features = torch.cat([low_pooled, mid_pooled, high_pooled], dim=-1)
-        fused_features = self.level_fusion(concat_features)
-
-        # 結合加權和拼接
-        flat_aspect_features = weighted_features + fused_features  # [batch * max_aspects, hidden_dim]
+        if self.use_hierarchical_features:
+            weighted_features = (
+                weights[0] * low_pooled +
+                weights[1] * mid_pooled +
+                weights[2] * high_pooled
+            )
+            concat_features = torch.cat([low_pooled, mid_pooled, high_pooled], dim=-1)
+            fused_features = self.level_fusion(concat_features)
+            # 結合加權和拼接
+            flat_aspect_features = weighted_features + fused_features  # [batch * max_aspects, hidden_dim]
+        else:
+            # 不使用階層特徵時，只用最後一層
+            flat_aspect_features = high_pooled  # [batch * max_aspects, hidden_dim]
 
         # 重塑回原始形狀
         aspect_features = flat_aspect_features.view(batch_size, max_aspects, -1)  # [batch, max_aspects, hidden_dim]
@@ -1245,63 +1260,64 @@ class HKGAN(nn.Module):
         all_gat_extras = [{'low': low_extras, 'mid': mid_extras, 'high': high_extras}]
 
         # 5. Inter-Aspect Attention (含情感隔離機制)
-        # 創建 attention mask
-        attn_mask = ~aspect_mask  # True = mask out
+        if self.use_inter_aspect:
+            # 創建 attention mask
+            attn_mask = ~aspect_mask  # True = mask out
 
-        # Self-attention across aspects
-        context_features, aspect_attn_weights = self.aspect_attention(
-            query=aspect_features,
-            key=aspect_features,
-            value=aspect_features,
-            key_padding_mask=attn_mask,
-            need_weights=True,
-            average_attn_weights=True
-        )
+            # Self-attention across aspects
+            context_features, aspect_attn_weights = self.aspect_attention(
+                query=aspect_features,
+                key=aspect_features,
+                value=aspect_features,
+                key_padding_mask=attn_mask,
+                need_weights=True,
+                average_attn_weights=True
+            )
 
-        # ========== 情感感知隔離機制 (v2.3) ==========
-        # 核心改進：根據「情感一致性」動態調整隔離程度
-        #
-        # Step 1: 預測每個面向的情感傾向（soft prediction）
-        self_sentiment = F.softmax(self.sentiment_predictor(aspect_features), dim=-1)  # [batch, max_aspects, 3]
-        context_sentiment = F.softmax(self.sentiment_predictor(context_features), dim=-1)  # [batch, max_aspects, 3]
+            # ========== 情感感知隔離機制 (v2.3) ==========
+            # 核心改進：根據「情感一致性」動態調整隔離程度
+            #
+            # Step 1: 預測每個面向的情感傾向（soft prediction）
+            self_sentiment = F.softmax(self.sentiment_predictor(aspect_features), dim=-1)  # [batch, max_aspects, 3]
+            context_sentiment = F.softmax(self.sentiment_predictor(context_features), dim=-1)  # [batch, max_aspects, 3]
 
-        # Step 2: 計算情感一致性（使用餘弦相似度或點積）
-        # 一致性高 = 兩個情感分布相似 → 應該允許信息流動
-        # 一致性低 = 兩個情感分布不同 → 應該隔離（可能是污染）
-        # 使用點積作為一致性度量（範圍 [0, 1]，因為 softmax 輸出都是正數且和為 1）
-        sentiment_consistency = (self_sentiment * context_sentiment).sum(dim=-1, keepdim=True)  # [batch, max_aspects, 1]
-        # sentiment_consistency 範圍約 [0.33, 1]（完全不同到完全一致）
+            # Step 2: 計算情感一致性（使用餘弦相似度或點積）
+            sentiment_consistency = (self_sentiment * context_sentiment).sum(dim=-1, keepdim=True)  # [batch, max_aspects, 1]
 
-        # Step 3: 基礎隔離門控（看自身特徵）
-        base_isolation_scores = self.isolation_gate(aspect_features)  # [batch, max_aspects, 1]
+            # Step 3: 基礎隔離門控（看自身特徵）
+            base_isolation_scores = self.isolation_gate(aspect_features)  # [batch, max_aspects, 1]
 
-        # Step 4: 根據一致性調整隔離程度
-        # 一致性高 → 降低隔離（乘以較小的因子）
-        # 一致性低 → 保持/提高隔離
-        #
-        # 公式: adjusted_isolation = base_isolation * (1 - consistency_strength * consistency)
-        # 當 consistency=1（完全一致）且 strength=0.5 時，隔離降低 50%
-        # 當 consistency=0.33（完全衝突）時，隔離幾乎不變
-        consistency_factor = 1 - self.consistency_strength * sentiment_consistency
-        adjusted_isolation = base_isolation_scores * consistency_factor
+            # Step 4: 根據一致性調整隔離程度
+            consistency_factor = 1 - self.consistency_strength * sentiment_consistency
+            adjusted_isolation = base_isolation_scores * consistency_factor
 
-        # Step 5: 與基準獨立性結合
-        effective_isolation = adjusted_isolation * (1 - self.base_isolation) + self.base_isolation
-        # 確保範圍在 [base_isolation, 1]
+            # Step 5: 與基準獨立性結合
+            effective_isolation = adjusted_isolation * (1 - self.base_isolation) + self.base_isolation
 
-        # 原有的關係門控
-        gate_input = torch.cat([aspect_features, context_features], dim=-1)
-        relation_gate_values = self.relation_gate(gate_input)  # [batch, max_aspects, 1]
+            # 原有的關係門控
+            gate_input = torch.cat([aspect_features, context_features], dim=-1)
+            relation_gate_values = self.relation_gate(gate_input)  # [batch, max_aspects, 1]
 
-        # 組合兩種門控（公式不變）
-        self_weight = effective_isolation + (1 - effective_isolation) * relation_gate_values
-        context_weight = (1 - effective_isolation) * (1 - relation_gate_values)
+            # 組合兩種門控
+            self_weight = effective_isolation + (1 - effective_isolation) * relation_gate_values
+            context_weight = (1 - effective_isolation) * (1 - relation_gate_values)
 
-        gated_features = self_weight * aspect_features + context_weight * context_features
+            gated_features = self_weight * aspect_features + context_weight * context_features
 
-        # 保存門控值用於分析
-        gate_values = relation_gate_values  # 向後兼容
-        isolation_scores = base_isolation_scores  # 用於 extras
+            # 保存門控值用於分析
+            gate_values = relation_gate_values  # 向後兼容
+            isolation_scores = base_isolation_scores  # 用於 extras
+        else:
+            # 不使用 Inter-Aspect 模組時，直接使用 aspect_features
+            gated_features = aspect_features
+            # 創建虛擬的變數用於 extras
+            aspect_attn_weights = torch.zeros(batch_size, max_aspects, max_aspects, device=device)
+            gate_values = torch.ones(batch_size, max_aspects, 1, device=device)
+            isolation_scores = torch.ones(batch_size, max_aspects, 1, device=device)
+            effective_isolation = torch.ones(batch_size, max_aspects, 1, device=device)
+            self_weight = torch.ones(batch_size, max_aspects, 1, device=device)
+            context_weight = torch.zeros(batch_size, max_aspects, 1, device=device)
+            sentiment_consistency = torch.ones(batch_size, max_aspects, 1, device=device)
 
         # 6. 分類
         logits = self.classifier(gated_features)  # [batch, max_aspects, num_classes]
@@ -1365,9 +1381,11 @@ def create_hkgan_model(args, num_classes: int = 3) -> HKGAN:
     Returns:
         HKGAN 模型實例
 
-    新增參數：
+    支援的消融參數：
         - use_confidence_gate: 是否使用信心門控（默認 True）
         - use_dynamic_gate: 是否使用動態知識門控 v3.0（默認 True）
+        - use_inter_aspect: 是否使用 Inter-Aspect 模組（默認 True）
+        - use_hierarchical_features: 是否使用階層式特徵（默認 True）
         - domain: 領域名稱，用於領域過濾（如 'laptops', 'restaurants'）
     """
     return HKGAN(
@@ -1382,5 +1400,7 @@ def create_hkgan_model(args, num_classes: int = 3) -> HKGAN:
         use_senticnet=getattr(args, 'use_senticnet', True),
         use_confidence_gate=getattr(args, 'use_confidence_gate', True),
         use_dynamic_gate=getattr(args, 'use_dynamic_gate', True),
+        use_inter_aspect=getattr(args, 'use_inter_aspect', True),
+        use_hierarchical_features=getattr(args, 'use_hierarchical_features', True),
         domain=getattr(args, 'domain', None)
     )

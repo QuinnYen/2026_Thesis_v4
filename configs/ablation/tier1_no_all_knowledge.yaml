@@ -1,11 +1,12 @@
-# 消融實驗: w/o Confidence Gate (v2.0)
-# 移除信心門控，所有情感詞都注入相同強度的知識
+# =============================================================================
+# Tier 1 核心架構消融: w/o All Knowledge
+# =============================================================================
+# 移除整個知識增強模組：SenticNet + Confidence Gate + Dynamic Gate
+# 預期效果差異: 5-15%（驗證知識增強整體價值）
 #
-# 預期效果：
-#   - Laptops 資料集上 Neutral F1 可能下降（技術術語被誤判為情感詞）
-#   - 例如 "high resolution" 中的 "high" 會被錯誤地視為正向情感
+# 保留：Hierarchical GAT, Inter-Aspect Module, Loss Engineering
 
-experiment_name: "ablation_no_confidence_gate"
+experiment_name: "ablation_no_all_knowledge"
 
 model:
   improved: "hkgan"
@@ -19,21 +20,18 @@ model:
   hidden_dim: 768
   dropout: 0.3
 
-  # GAT 參數
+  # GAT 參數（保留）
   gat_heads: 4
   gat_layers: 2
 
-  # SenticNet 仍然啟用
-  use_senticnet: true
-  knowledge_weight: 0.1
-
-  # ========== 消融：關閉信心門控 ==========
+  # === 移除所有知識增強 ===
+  use_senticnet: false
+  knowledge_weight: 0.0
   use_confidence_gate: false
-
-  # 動態門控仍然啟用
-  use_dynamic_gate: true
-
+  use_dynamic_gate: false
   domain: null
+
+  # IARN 參數（保留）
   iarm_heads: 4
 
 data:
@@ -59,18 +57,22 @@ training:
   use_scheduler: true
   warmup_ratio: 0.1
 
+  # 保留 Loss Engineering
   loss_type: "focal"
   focal_gamma: 2.0
   class_weights: [0.8, 1.8, 0.8]
 
   virtual_weight: 0.5
 
+  # 保留 LLRD
   use_llrd: true
   llrd_decay: 0.95
 
+  # 保留對比學習
   contrastive_weight: 0.1
   contrastive_temperature: 0.07
 
+  # 保留 Logit 調整
   neutral_boost:
     laptops: 0.8
     lap16: 0.8

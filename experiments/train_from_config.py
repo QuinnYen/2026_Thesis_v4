@@ -135,6 +135,20 @@ def config_to_args(config, dataset=None):
             else:
                 args.append('--no_dynamic_gate')
 
+        # 消融實驗用：Inter-Aspect 模組
+        if 'use_inter_aspect' in model_cfg:
+            if model_cfg['use_inter_aspect']:
+                args.append('--use_inter_aspect')
+            else:
+                args.append('--no_inter_aspect')
+
+        # 消融實驗用：階層式特徵
+        if 'use_hierarchical_features' in model_cfg:
+            if model_cfg['use_hierarchical_features']:
+                args.append('--use_hierarchical_features')
+            else:
+                args.append('--no_hierarchical_features')
+
         if 'domain' in model_cfg and model_cfg['domain']:
             args.extend(['--domain', model_cfg['domain']])
 

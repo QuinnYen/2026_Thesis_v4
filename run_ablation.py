@@ -1,31 +1,34 @@
 """
 消融實驗執行腳本
 
-支援的消融變體:
+分層消融設計（共 7 個實驗）：
+
+Tier 1 - 核心架構消融（預期差異 5-15%）：
     - full: 完整 HKGAN 模型（基準）
-    - no_senticnet: 移除 SenticNet 知識增強
-    - no_dynamic_gate: 移除動態知識門控 (v3.0)
-    - no_confidence_gate: 移除信心門控 (v2.0)
-    - no_contrastive: 移除對比學習
-    - no_logit_adjust: 移除非對稱 Logit 調整
-    - no_focal_loss: 改用 CrossEntropy
-    - no_llrd: 移除逐層學習率衰減
+    - bert_only: BERT-only Baseline（移除所有創新組件）
+    - no_all_knowledge: 移除整個知識增強模組（SenticNet + Gates）
+    - no_hierarchical_gat: 移除階層式 GAT（改用 HBL）
+    - no_inter_aspect: 移除 Inter-Aspect 多面向處理模組
+
+Tier 2 - 組件組合消融（預期差異 2-8%）：
+    - no_all_loss_eng: 移除所有損失函數工程（Focal + Contrastive + Logit Adjust）
+    - no_knowledge_gating: 移除知識門控（Confidence + Dynamic Gate）
 
 使用方法:
-    # 執行單個消融實驗
-    python run_ablation.py --ablation no_senticnet --dataset laptops
+    # 執行所有消融實驗（單一資料集）
+    python run_ablation.py --all --dataset restaurants
 
     # 執行多種子消融實驗（驗證穩定性）
-    python run_ablation.py --ablation no_senticnet --dataset laptops --multi-seed
-
-    # 執行所有消融實驗（單一資料集）
-    python run_ablation.py --all --dataset laptops
+    python run_ablation.py --all --dataset restaurants --multi-seed
 
     # 執行完整消融研究（所有變體 × 所有資料集）
     python run_ablation.py --full-study
 
-    # 只生成消融報告
-    python run_ablation.py --report-only --dataset laptops
+    # 執行完整消融研究（含多種子）
+    python run_ablation.py --full-study --multi-seed
+
+    # 只生成消融報告（從已有結果）
+    python run_ablation.py --report-only
 
     # 列出所有可用的消融變體
     python run_ablation.py --list
@@ -39,28 +42,42 @@ import json
 import numpy as np
 from datetime import datetime
 
-# 消融變體對應的配置檔案
+# =============================================================================
+# 消融變體配置
+# =============================================================================
+# 分層設計：
+#   Tier 1: 核心架構消融（預期差異 5-15%）- 驗證主要創新貢獻
+#   Tier 2: 組件組合消融（預期差異 2-8%）- 驗證輔助機制價值
+
 ABLATION_CONFIGS = {
+    # === 基準配置 ===
     'full': 'configs/ablation/base_hkgan.yaml',
-    'no_senticnet': 'configs/ablation/no_senticnet.yaml',
-    'no_dynamic_gate': 'configs/ablation/no_dynamic_gate.yaml',
-    'no_confidence_gate': 'configs/ablation/no_confidence_gate.yaml',
-    'no_contrastive': 'configs/ablation/no_contrastive.yaml',
-    'no_logit_adjust': 'configs/ablation/no_logit_adjust.yaml',
-    'no_focal_loss': 'configs/ablation/no_focal_loss.yaml',
-    'no_llrd': 'configs/ablation/no_llrd.yaml',
+
+    # === Tier 1: 核心架構消融 ===
+    'bert_only': 'configs/ablation/tier1_bert_only.yaml',
+    'no_all_knowledge': 'configs/ablation/tier1_no_all_knowledge.yaml',
+    'no_hierarchical_gat': 'configs/ablation/tier1_no_hierarchical_gat.yaml',
+    'no_inter_aspect': 'configs/ablation/tier1_no_inter_aspect.yaml',
+
+    # === Tier 2: 組件組合消融 ===
+    'no_all_loss_eng': 'configs/ablation/tier2_no_all_loss_engineering.yaml',
+    'no_knowledge_gating': 'configs/ablation/tier2_no_knowledge_gating.yaml',
 }
 
 # 消融變體的中文描述
 ABLATION_DESCRIPTIONS = {
+    # === 基準 ===
     'full': '完整 HKGAN 模型（基準）',
-    'no_senticnet': '移除 SenticNet 知識增強',
-    'no_dynamic_gate': '移除動態知識門控 (v3.0)',
-    'no_confidence_gate': '移除信心門控 (v2.0)',
-    'no_contrastive': '移除對比學習',
-    'no_logit_adjust': '移除非對稱 Logit 調整',
-    'no_focal_loss': '改用 CrossEntropy Loss',
-    'no_llrd': '移除逐層學習率衰減 (LLRD)',
+
+    # === Tier 1: 核心架構消融 ===
+    'bert_only': '[Tier1] BERT-only Baseline (移除所有創新組件)',
+    'no_all_knowledge': '[Tier1] w/o All Knowledge (移除整個知識增強模組)',
+    'no_hierarchical_gat': '[Tier1] w/o Hierarchical GAT (改用 HBL)',
+    'no_inter_aspect': '[Tier1] w/o Inter-Aspect Module (移除多面向處理)',
+
+    # === Tier 2: 組件組合消融 ===
+    'no_all_loss_eng': '[Tier2] w/o All Loss Engineering (移除 Focal+Contrastive+Logit)',
+    'no_knowledge_gating': '[Tier2] w/o Knowledge Gating (移除 Confidence+Dynamic Gate)',
 }
 
 # 多種子實驗用的種子列表
@@ -69,16 +86,17 @@ MULTI_SEED_LIST = [42, 123, 2023, 999, 0]
 # 所有支援的資料集
 ALL_DATASETS = ['restaurants', 'laptops', 'mams', 'rest16', 'lap16']
 
-# 消融實驗推薦的執行順序（按重要性）
+# 消融實驗執行順序（按重要性）
 ABLATION_ORDER = [
     'full',              # 基準
-    'no_senticnet',      # 核心創新 1
-    'no_dynamic_gate',   # 核心創新 2 (v3.0)
-    'no_confidence_gate', # 核心創新 3 (v2.0)
-    'no_contrastive',    # 輔助機制 1
-    'no_logit_adjust',   # 輔助機制 2
-    'no_focal_loss',     # 訓練技巧 1
-    'no_llrd',           # 訓練技巧 2
+    # Tier 1: 核心架構
+    'bert_only',         # BERT-only baseline
+    'no_all_knowledge',  # 移除整個知識增強
+    'no_hierarchical_gat',  # 移除 GAT
+    'no_inter_aspect',   # 移除多面向處理
+    # Tier 2: 組件組合
+    'no_all_loss_eng',   # 移除所有 loss engineering
+    'no_knowledge_gating', # 移除知識門控
 ]
 
 
@@ -126,7 +144,7 @@ def run_ablation_experiment(ablation_type, dataset, seed_override=None):
         subprocess.run(cmd, check=True)
         return True
     except subprocess.CalledProcessError as e:
-        print(f"\n✗ {description} FAILED (code: {e.returncode})\n")
+        print(f"\n[X] {description} FAILED (code: {e.returncode})\n")
         return False
     except KeyboardInterrupt:
         print(f"\n中斷執行")
@@ -266,13 +284,13 @@ def generate_multi_seed_ablation_report(ablation_type, dataset, results):
     report.append("-" * 80)
     report.append("")
     report.append("-" * 80)
-    report.append("Aggregated Statistics (Mean ± Std)")
+    report.append("Aggregated Statistics (Mean +/- Std)")
     report.append("-" * 80)
-    report.append(f"  Accuracy:   {acc_mean:.2f}% ± {acc_std:.2f}%")
-    report.append(f"  Macro-F1:   {f1_mean:.2f}% ± {f1_std:.2f}%")
-    report.append(f"  Neg F1:     {neg_mean:.2f}% ± {neg_std:.2f}%")
-    report.append(f"  Neu F1:     {neu_mean:.2f}% ± {neu_std:.2f}%")
-    report.append(f"  Pos F1:     {pos_mean:.2f}% ± {pos_std:.2f}%")
+    report.append(f"  Accuracy:   {acc_mean:.2f}% +/- {acc_std:.2f}%")
+    report.append(f"  Macro-F1:   {f1_mean:.2f}% +/- {f1_std:.2f}%")
+    report.append(f"  Neg F1:     {neg_mean:.2f}% +/- {neg_std:.2f}%")
+    report.append(f"  Neu F1:     {neu_mean:.2f}% +/- {neu_std:.2f}%")
+    report.append(f"  Pos F1:     {pos_mean:.2f}% +/- {pos_std:.2f}%")
     report.append("-" * 80)
     report.append("")
     report.append("=" * 80)
@@ -347,7 +365,11 @@ def run_all_ablations(dataset, multi_seed=False):
 
 
 def run_full_study(multi_seed=False):
-    """執行完整消融研究（所有變體 × 所有資料集）"""
+    """執行完整消融研究（所有變體 × 所有資料集）
+
+    Args:
+        multi_seed: 是否執行多種子實驗
+    """
     print(f"\n{'='*80}")
     print(f"[Full Ablation Study]")
     print(f"Datasets: {len(ALL_DATASETS)}")
@@ -378,35 +400,94 @@ def run_full_study(multi_seed=False):
 
 
 def generate_ablation_summary_report():
-    """生成消融實驗總結報告（從已有的 JSON 結果）"""
+    """生成消融實驗總結報告（從已有的 JSON 結果）
+
+    支援兩種格式：
+    1. 多種子彙總報告: ablation_{type}_{dataset}.json
+    2. 單次實驗結果: experiment_results.json（目錄名含 ablation_{type}）
+    """
     reports_dir = Path("results/ablation")
     if not reports_dir.exists():
-        print("錯誤: 沒有找到消融實驗結果")
+        print("錯誤: 沒有找到消融實驗結果目錄")
         return
 
     # 收集所有 JSON 結果
     all_results = {}
 
-    for json_file in reports_dir.glob("ablation_*.json"):
+    # 方法 1: 搜尋多種子彙總報告 (ablation_*.json)
+    for json_file in reports_dir.glob("**/ablation_*.json"):
+        if 'experiment_' in json_file.name:
+            continue  # 跳過 experiment_results.json
         try:
             with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                ablation_type = data['ablation_type']
-                dataset = data['dataset']
+                ablation_type = data.get('ablation_type')
+                dataset = data.get('dataset')
+
+                if ablation_type and dataset:
+                    if dataset not in all_results:
+                        all_results[dataset] = {}
+
+                    all_results[dataset][ablation_type] = {
+                        'acc_mean': data['aggregated']['accuracy']['mean'],
+                        'acc_std': data['aggregated']['accuracy']['std'],
+                        'f1_mean': data['aggregated']['f1_macro']['mean'],
+                        'f1_std': data['aggregated']['f1_macro']['std'],
+                        'neu_mean': data['aggregated']['f1_neu']['mean'],
+                        'neu_std': data['aggregated']['f1_neu']['std'],
+                    }
+        except Exception as e:
+            print(f"警告: 無法讀取多種子報告 {json_file}: {e}")
+
+    # 方法 2: 搜尋單次實驗結果 (experiment_results.json)
+    for json_file in reports_dir.glob("**/experiment_results.json"):
+        try:
+            # 從目錄名解析消融類型和資料集
+            # 格式: results/ablation/{dataset}/{timestamp}_ablation_{type}/reports/experiment_results.json
+            exp_dir = json_file.parent.parent  # e.g., 20251208_132317_ablation_full
+            dataset_dir = exp_dir.parent  # e.g., restaurants
+
+            dataset = dataset_dir.name
+            exp_name = exp_dir.name  # e.g., 20251208_132317_ablation_full
+
+            # 解析消融類型
+            ablation_type = None
+            for abl_type in ABLATION_CONFIGS.keys():
+                if f"ablation_{abl_type}" in exp_name:
+                    ablation_type = abl_type
+                    break
+
+            if not ablation_type or dataset not in ALL_DATASETS:
+                continue
+
+            # 如果已有多種子結果，跳過單次結果
+            if dataset in all_results and ablation_type in all_results[dataset]:
+                continue
+
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                test_metrics = data.get('test_metrics', {})
+
+                if not test_metrics:
+                    continue
 
                 if dataset not in all_results:
                     all_results[dataset] = {}
 
+                # 單次實驗沒有 std，設為 0
+                f1_per_class = test_metrics.get('f1_per_class', [0, 0, 0])
+                neu_f1 = f1_per_class[1] * 100 if len(f1_per_class) > 1 else 0
+
                 all_results[dataset][ablation_type] = {
-                    'acc_mean': data['aggregated']['accuracy']['mean'],
-                    'acc_std': data['aggregated']['accuracy']['std'],
-                    'f1_mean': data['aggregated']['f1_macro']['mean'],
-                    'f1_std': data['aggregated']['f1_macro']['std'],
-                    'neu_mean': data['aggregated']['f1_neu']['mean'],
-                    'neu_std': data['aggregated']['f1_neu']['std'],
+                    'acc_mean': test_metrics.get('accuracy', 0) * 100,
+                    'acc_std': 0,
+                    'f1_mean': test_metrics.get('f1_macro', 0) * 100,
+                    'f1_std': 0,
+                    'neu_mean': neu_f1,
+                    'neu_std': 0,
                 }
         except Exception as e:
-            print(f"警告: 無法讀取 {json_file}: {e}")
+            print(f"警告: 無法讀取單次實驗結果 {json_file}: {e}")
 
     if not all_results:
         print("錯誤: 沒有找到有效的消融實驗結果")
@@ -429,7 +510,7 @@ def generate_ablation_summary_report():
         report.append("-" * 100)
         report.append(f"Dataset: {dataset.upper()}")
         report.append("-" * 100)
-        report.append(f"{'Variant':<25} {'Acc (%)':<15} {'Macro-F1 (%)':<15} {'Neu F1 (%)':<15} {'Δ F1':<10}")
+        report.append(f"{'Variant':<25} {'Acc (%)':<15} {'Macro-F1 (%)':<15} {'Neu F1 (%)':<15} {'Delta F1':<10}")
         report.append("-" * 100)
 
         # 獲取基準（full）的 F1
@@ -445,9 +526,9 @@ def generate_ablation_summary_report():
 
             report.append(
                 f"{ablation_type:<25} "
-                f"{r['acc_mean']:.2f}±{r['acc_std']:.2f}    "
-                f"{r['f1_mean']:.2f}±{r['f1_std']:.2f}    "
-                f"{r['neu_mean']:.2f}±{r['neu_std']:.2f}    "
+                f"{r['acc_mean']:.2f}+/-{r['acc_std']:.2f}    "
+                f"{r['f1_mean']:.2f}+/-{r['f1_std']:.2f}    "
+                f"{r['neu_mean']:.2f}+/-{r['neu_std']:.2f}    "
                 f"{delta_str}"
             )
 
@@ -455,7 +536,7 @@ def generate_ablation_summary_report():
 
     report.append("=" * 100)
     report.append("說明:")
-    report.append("  - Δ F1: 相對於 full (完整模型) 的 Macro-F1 變化")
+    report.append("  - Delta F1: 相對於 full (完整模型) 的 Macro-F1 變化")
     report.append("  - 負值表示移除該組件後性能下降（該組件有正面貢獻）")
     report.append("=" * 100)
 
@@ -471,15 +552,28 @@ def generate_ablation_summary_report():
 
 def list_ablations():
     """列出所有可用的消融變體"""
-    print("\n可用的消融變體:")
-    print("=" * 60)
-    for ablation_type in ABLATION_ORDER:
+    print("\n可用的消融變體 (共 7 個):")
+    print("=" * 70)
+
+    print("\n[Tier 1] 核心架構消融（預期差異 5-15%）:")
+    print("-" * 70)
+    tier1 = ['full', 'bert_only', 'no_all_knowledge', 'no_hierarchical_gat', 'no_inter_aspect']
+    for ablation_type in tier1:
         config = ABLATION_CONFIGS.get(ablation_type, 'N/A')
         desc = ABLATION_DESCRIPTIONS.get(ablation_type, 'N/A')
         exists = "[O]" if Path(config).exists() else "[X]"
         print(f"  {exists} {ablation_type:<20s}: {desc}")
-        print(f"      Config: {config}")
-    print("=" * 60)
+
+    print("\n[Tier 2] 組件組合消融（預期差異 2-8%）:")
+    print("-" * 70)
+    tier2 = ['no_all_loss_eng', 'no_knowledge_gating']
+    for ablation_type in tier2:
+        config = ABLATION_CONFIGS.get(ablation_type, 'N/A')
+        desc = ABLATION_DESCRIPTIONS.get(ablation_type, 'N/A')
+        exists = "[O]" if Path(config).exists() else "[X]"
+        print(f"  {exists} {ablation_type:<20s}: {desc}")
+
+    print("\n" + "=" * 70)
 
 
 def main():
@@ -488,16 +582,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 範例:
-    # 執行單個消融實驗
-    python run_ablation.py --ablation no_senticnet --dataset laptops
-
-    # 執行多種子消融實驗
-    python run_ablation.py --ablation no_senticnet --dataset laptops --multi-seed
-
     # 執行所有消融實驗（單一資料集）
-    python run_ablation.py --all --dataset laptops
+    python run_ablation.py --all --dataset restaurants
 
-    # 執行完整消融研究
+    # 執行多種子消融實驗（驗證穩定性）
+    python run_ablation.py --all --dataset restaurants --multi-seed
+
+    # 執行完整消融研究（所有變體 × 所有資料集）
     python run_ablation.py --full-study
 
     # 生成消融報告
@@ -508,9 +599,6 @@ def main():
         """
     )
 
-    parser.add_argument('--ablation', type=str, default=None,
-                        choices=list(ABLATION_CONFIGS.keys()),
-                        help='消融變體名稱')
     parser.add_argument('--dataset', type=str, default=None,
                         choices=ALL_DATASETS,
                         help='資料集選擇')
@@ -532,13 +620,9 @@ def main():
         list_ablations()
         return
 
-    # 只生成報告（調用專門的報告生成腳本）
+    # 只生成報告
     if args.report_only:
-        import subprocess
-        cmd = [sys.executable, "experiments/generate_ablation_report.py", "--all", "--use-multi-seed"]
-        if args.dataset:
-            cmd = [sys.executable, "experiments/generate_ablation_report.py", "--dataset", args.dataset, "--use-multi-seed"]
-        subprocess.run(cmd)
+        generate_ablation_summary_report()
         return
 
     # 完整消融研究
@@ -551,17 +635,6 @@ def main():
         if args.dataset is None:
             parser.error("--all 需要指定 --dataset")
         run_all_ablations(args.dataset, multi_seed=args.multi_seed)
-        return
-
-    # 執行單個消融實驗
-    if args.ablation:
-        if args.dataset is None:
-            parser.error("--ablation 需要指定 --dataset")
-
-        if args.multi_seed:
-            run_multi_seed_ablation(args.ablation, args.dataset)
-        else:
-            run_ablation_experiment(args.ablation, args.dataset)
         return
 
     # 沒有指定任何動作

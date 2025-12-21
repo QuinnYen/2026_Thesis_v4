@@ -875,6 +875,12 @@ def train_multiaspect_model(args):
     if args.no_dynamic_gate:
         args.use_dynamic_gate = False
 
+    # 消融實驗用：處理 Inter-Aspect 和 Hierarchical Features 參數
+    if args.no_inter_aspect:
+        args.use_inter_aspect = False
+    if args.no_hierarchical_features:
+        args.use_hierarchical_features = False
+
     # 自動推斷 domain（如果未指定）
     if args.domain is None and args.improved == 'hkgan':
         # 根據數據集名稱自動設置領域
@@ -1616,6 +1622,16 @@ def main():
                         help='HKGAN v3.0: 禁用動態知識門控')
     parser.add_argument('--domain', type=str, default=None,
                         help='HKGAN: 領域名稱，用於領域過濾（如不指定，將自動根據數據集推斷）')
+
+    # 消融實驗用參數
+    parser.add_argument('--use_inter_aspect', action='store_true', default=True,
+                        help='是否使用 Inter-Aspect Attention 模組')
+    parser.add_argument('--no_inter_aspect', action='store_true', default=False,
+                        help='禁用 Inter-Aspect Attention 模組（消融實驗用）')
+    parser.add_argument('--use_hierarchical_features', action='store_true', default=True,
+                        help='是否使用階層式 BERT 特徵')
+    parser.add_argument('--no_hierarchical_features', action='store_true', default=False,
+                        help='禁用階層式特徵，只用 BERT 最後一層（消融實驗用）')
 
     # 訓練參數
     parser.add_argument('--batch_size', type=int, default=16,

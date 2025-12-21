@@ -1,11 +1,13 @@
-# 消融實驗: w/o Layer-wise Learning Rate Decay (LLRD)
-# 移除逐層學習率衰減，使用統一學習率
+# =============================================================================
+# Tier 2 組件組合消融: w/o All Loss Engineering
+# =============================================================================
+# 移除所有損失函數工程：Focal Loss + Contrastive + Logit Adjustment
+# 改用標準 CrossEntropy Loss
+# 預期效果差異: 2-8%（驗證損失函數設計的整體貢獻）
 #
-# 預期效果：
-#   - BERT 底層可能過擬合
-#   - 訓練穩定性可能下降
+# 保留：HKGAN 架構, Knowledge Enhancement
 
-experiment_name: "ablation_no_llrd"
+experiment_name: "ablation_no_all_loss_eng"
 
 model:
   improved: "hkgan"
@@ -19,18 +21,18 @@ model:
   hidden_dim: 768
   dropout: 0.3
 
-  # GAT 參數
+  # GAT 參數（保留）
   gat_heads: 4
   gat_layers: 2
 
-  # SenticNet 啟用
+  # 知識增強（保留）
   use_senticnet: true
   knowledge_weight: 0.1
-
   use_confidence_gate: true
   use_dynamic_gate: true
-
   domain: null
+
+  # Inter-Aspect（保留）
   iarm_heads: 4
 
 data:
@@ -56,39 +58,25 @@ training:
   use_scheduler: true
   warmup_ratio: 0.1
 
-  loss_type: "focal"
-  focal_gamma: 2.0
-  class_weights: [0.8, 1.8, 0.8]
+  # === 移除所有 Loss Engineering ===
+  # 使用標準 CrossEntropy，不使用 Focal Loss
+  loss_type: "ce"
+  class_weights: [1.0, 1.0, 1.0]
 
   virtual_weight: 0.5
 
-  # ========== 消融：關閉 LLRD ==========
-  use_llrd: false
-  llrd_decay: 1.0
+  # 保留 LLRD（這是優化器相關，不是 loss engineering）
+  use_llrd: true
+  llrd_decay: 0.95
 
-  contrastive_weight: 0.1
+  # 移除對比學習
+  contrastive_weight: 0.0
   contrastive_temperature: 0.07
 
+  # 移除 Logit 調整
   neutral_boost:
-    laptops: 0.8
-    lap16: 0.8
-    restaurants: 0.6
-    rest16: 1.0
-    mams: 0.0
     default: 0.0
-
   neg_suppress:
-    laptops: 0.6
-    lap16: 0.6
-    restaurants: 0.0
-    rest16: 0.2
-    mams: 0.0
     default: 0.0
-
   pos_suppress:
-    laptops: 0.0
-    lap16: 0.0
-    restaurants: 0.8
-    rest16: 0.5
-    mams: 0.0
     default: 0.0

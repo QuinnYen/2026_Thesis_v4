@@ -1,11 +1,14 @@
-# 消融實驗: w/o Dynamic Gate (v3.0)
-# 移除動態知識門控，改用硬性注入
+# =============================================================================
+# Tier 1 核心架構消融: w/o Inter-Aspect Module
+# =============================================================================
+# 移除 Inter-Aspect Attention + Sentiment-Aware Isolation
+# 預期效果差異: 2-5%（驗證多面向處理的貢獻）
 #
-# 預期效果：
-#   - MAMS 資料集上 F1 可能下降（轉折句處理變差）
-#   - 簡單資料集（Laptops/Restaurants）影響較小
+# 保留：Knowledge Enhancement, Hierarchical GAT, Loss Engineering
+#
+# 注意：這需要在模型中新增 use_inter_aspect 參數來控制
 
-experiment_name: "ablation_no_dynamic_gate"
+experiment_name: "ablation_no_inter_aspect"
 
 model:
   improved: "hkgan"
@@ -19,21 +22,19 @@ model:
   hidden_dim: 768
   dropout: 0.3
 
-  # GAT 參數
+  # GAT 參數（保留）
   gat_heads: 4
   gat_layers: 2
 
-  # SenticNet 仍然啟用
+  # 知識增強（保留）
   use_senticnet: true
   knowledge_weight: 0.1
-
-  # 信心門控仍然啟用
   use_confidence_gate: true
-
-  # ========== 消融：關閉動態知識門控 ==========
-  use_dynamic_gate: false
-
+  use_dynamic_gate: true
   domain: null
+
+  # === 移除 Inter-Aspect 模組 ===
+  use_inter_aspect: false
   iarm_heads: 4
 
 data:
@@ -59,18 +60,22 @@ training:
   use_scheduler: true
   warmup_ratio: 0.1
 
+  # 保留 Loss Engineering
   loss_type: "focal"
   focal_gamma: 2.0
   class_weights: [0.8, 1.8, 0.8]
 
   virtual_weight: 0.5
 
+  # 保留 LLRD
   use_llrd: true
   llrd_decay: 0.95
 
+  # 保留對比學習
   contrastive_weight: 0.1
   contrastive_temperature: 0.07
 
+  # 保留 Logit 調整
   neutral_boost:
     laptops: 0.8
     lap16: 0.8

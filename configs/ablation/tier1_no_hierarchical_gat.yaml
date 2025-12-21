@@ -1,14 +1,17 @@
-# 消融實驗: w/o Focal Loss
-# 改用標準 CrossEntropy Loss，驗證 Focal Loss 對困難樣本的貢獻
+# =============================================================================
+# Tier 1 核心架構消融: w/o Hierarchical GAT
+# =============================================================================
+# 移除三層級 GAT，改用 Hierarchical BERT (HBL) 替代
+# 預期效果差異: 3-8%（驗證圖結構的必要性）
 #
-# 預期效果：
-#   - 少數類別（Neutral）F1 可能下降
-#   - 模型可能過度關注簡單樣本
+# 保留：Knowledge Enhancement, Inter-Aspect Module, Loss Engineering
+# 替代方案：使用 HBL (Layer-wise Attention) 做階層特徵融合
 
-experiment_name: "ablation_no_focal_loss"
+experiment_name: "ablation_no_hierarchical_gat"
 
 model:
-  improved: "hkgan"
+  # 使用 HBL 替代 HKGAN
+  improved: "hbl"
   bert_model:
     laptops: "data/dapt/laptop_dapt/final"
     lap16: "data/dapt/laptop_dapt/final"
@@ -19,19 +22,8 @@ model:
   hidden_dim: 768
   dropout: 0.3
 
-  # GAT 參數
-  gat_heads: 4
-  gat_layers: 2
-
-  # SenticNet 啟用
-  use_senticnet: true
-  knowledge_weight: 0.1
-
-  use_confidence_gate: true
-  use_dynamic_gate: true
-
-  domain: null
-  iarm_heads: 4
+  # HBL 參數
+  num_attention_heads: 4
 
 data:
   use_augmented: false
@@ -56,19 +48,22 @@ training:
   use_scheduler: true
   warmup_ratio: 0.1
 
-  # ========== 消融：改用 CrossEntropy ==========
-  loss_type: "ce"
-  focal_gamma: 0.0
+  # 保留 Loss Engineering
+  loss_type: "focal"
+  focal_gamma: 2.0
   class_weights: [0.8, 1.8, 0.8]
 
   virtual_weight: 0.5
 
+  # 保留 LLRD
   use_llrd: true
   llrd_decay: 0.95
 
+  # 保留對比學習
   contrastive_weight: 0.1
   contrastive_temperature: 0.07
 
+  # 保留 Logit 調整
   neutral_boost:
     laptops: 0.8
     lap16: 0.8

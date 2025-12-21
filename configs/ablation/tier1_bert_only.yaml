@@ -1,0 +1,68 @@
+# =============================================================================
+# Tier 1 核心架構消融: BERT-only Baseline
+# =============================================================================
+# 移除所有創新組件，只保留 BERT + 簡單分類器
+# 預期效果差異: 5-15%（建立真正的下限基準）
+#
+# 這個配置使用 BERT-CLS baseline，不使用任何 HKGAN 組件
+
+experiment_name: "ablation_bert_only"
+
+model:
+  # 使用 baseline 模式而非 improved 模式
+  baseline: "bert-cls"
+  improved: null
+
+  bert_model:
+    laptops: "data/dapt/laptop_dapt/final"
+    lap16: "data/dapt/laptop_dapt/final"
+    restaurants: "data/dapt/restaurant_dapt/final"
+    rest16: "data/dapt/restaurant_dapt/final"
+    default: "bert-base-uncased"
+  freeze_bert: false
+  hidden_dim: 768
+  dropout: 0.3
+
+data:
+  use_augmented: false
+  use_self_training: false
+  min_aspects: 2
+  max_aspects: 8
+  include_single_aspect: true
+  virtual_aspect_mode: "overall"
+  max_text_len: 128
+  max_aspect_len: 10
+
+training:
+  batch_size: 16
+  accumulation_steps: 2
+  epochs: 30
+  lr: 3.0e-5
+  weight_decay: 0.01
+  grad_clip: 1.0
+  patience: 10
+  seed: 42
+
+  use_scheduler: true
+  warmup_ratio: 0.1
+
+  # 使用標準 CrossEntropy（不使用任何 loss engineering）
+  loss_type: "ce"
+  class_weights: [1.0, 1.0, 1.0]
+
+  virtual_weight: 0.5
+
+  # 不使用 LLRD
+  use_llrd: false
+  llrd_decay: 1.0
+
+  # 不使用對比學習
+  contrastive_weight: 0.0
+
+  # 不使用 Logit 調整
+  neutral_boost:
+    default: 0.0
+  neg_suppress:
+    default: 0.0
+  pos_suppress:
+    default: 0.0

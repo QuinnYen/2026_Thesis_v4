@@ -1314,6 +1314,9 @@ def create_improved_model(model_type, args, num_classes=3):
             use_confidence_gate=getattr(args, 'use_confidence_gate', True),
             # v3.0 新增：動態知識門控（解決 MAMS 複雜句問題）
             use_dynamic_gate=getattr(args, 'use_dynamic_gate', True),
+            # 消融實驗用
+            use_inter_aspect=getattr(args, 'use_inter_aspect', True),
+            use_hierarchical_features=getattr(args, 'use_hierarchical_features', True),
             domain=getattr(args, 'domain', None)
         )
 
