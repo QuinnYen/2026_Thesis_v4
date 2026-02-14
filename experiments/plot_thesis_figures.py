@@ -3,9 +3,11 @@
 
 支援圖表:
   - f1: Macro-F1 分組條形圖（圖 4.2.1）
-  - auc: AUC 折線圖（圖 4.2.2）
+  - auc: AUC 分組條形圖（圖 4.2.2）
   - neutral: 中性類別改善 vs 數據集不平衡散點圖（圖 4.2.3）
-  - all: 生成所有圖表
+  - boxplot: Macro-F1 箱型圖（穩定性分析）
+  - roc: ROC 曲線圖（需要先匯出預測資料）
+  - all: 生成所有圖表（含 ROC，需要先匯出預測資料）
 
 使用方法:
     # 生成 Macro-F1 對比圖
@@ -19,6 +21,9 @@
 
     # 生成 Macro-F1 箱型圖
     python experiments/plot_thesis_figures.py --figure boxplot
+
+    # 生成 ROC 曲線圖
+    python experiments/plot_thesis_figures.py --figure roc
 
     # 生成所有圖表並保存
     python experiments/plot_thesis_figures.py --figure all --output results/figures/
@@ -38,8 +43,8 @@ plt.rcParams['axes.unicode_minus'] = False
 # 數據集顯示名稱
 DISPLAY_NAMES = {
     'rest16': 'REST16',
-    'restaurants': 'Restaurants',
-    'laptops': 'Laptops',
+    'restaurants': 'REST14',
+    'laptops': 'LAP14',
     'lap16': 'LAP16',
     'mams': 'MAMS'
 }
@@ -50,8 +55,8 @@ DATASETS_ORDER = ['rest16', 'restaurants', 'laptops', 'lap16', 'mams']
 # 來源: SemEval-2014/2016 官方數據集及 MAMS 論文
 NEUTRAL_RATIO = {
     'rest16': 5.4,       # REST16: 中性樣本極少（約5.4%）
-    'restaurants': 10.8,  # Restaurants14: 中性樣本較少（約10.8%）
-    'laptops': 19.2,      # Laptops14: 中性樣本適中（約19.2%）
+    'restaurants': 10.8,  # REST14: 中性樣本較少（約10.8%）
+    'laptops': 19.2,      # LAP14: 中性樣本適中（約19.2%）
     'lap16': 6.8,         # LAP16: 中性樣本極少（約6.8%）
     'mams': 32.7          # MAMS: 專門設計的平衡數據集（約32.7%）
 }
@@ -785,6 +790,205 @@ def plot_f1_boxplot(output_path=None, show=True):
     print("=" * 100)
 
 
+def get_predictions_data():
+    """從實驗結果讀取預測資料（用於 ROC 曲線）
+
+    需要先執行 scripts/export_predictions_for_roc.py 來生成預測資料
+    """
+    results_dir = Path("results")
+    data = {}
+
+    for model_type in ['improved', 'baseline']:
+        base_dir = results_dir / model_type if model_type == 'improved' else results_dir / 'baseline'
+
+        for ds in DATASETS_ORDER:
+            ds_dir = base_dir / ds
+            if not ds_dir.exists():
+                continue
+
+            # 找最佳實驗（基於測試 F1）
+            best_f1 = -1
+            best_pred_file = None
+
+            for exp_dir in ds_dir.iterdir():
+                if not exp_dir.is_dir():
+                    continue
+
+                pred_file = exp_dir / "reports" / "predictions_for_roc.json"
+                results_file = exp_dir / "reports" / "experiment_results.json"
+
+                if pred_file.exists() and results_file.exists():
+                    with open(results_file, 'r', encoding='utf-8') as f:
+                        result = json.load(f)
+                    test_f1 = result.get('test_metrics', {}).get('f1_macro', 0)
+
+                    if test_f1 > best_f1:
+                        best_f1 = test_f1
+                        best_pred_file = pred_file
+
+            if best_pred_file:
+                with open(best_pred_file, 'r', encoding='utf-8') as f:
+                    pred_data = json.load(f)
+
+                key = f"{ds}_{model_type}"
+                data[key] = {
+                    'y_true': np.array(pred_data['y_true']),
+                    'y_probs': np.array(pred_data['y_probs']),
+                    'y_pred': np.array(pred_data['y_pred']),
+                    'dataset': ds,
+                    'model_type': model_type
+                }
+
+    return data
+
+
+def plot_roc_curves(output_path=None, show=True):
+    """繪製 ROC 曲線圖（真實資料）
+
+    為每個資料集繪製 ROC 曲線，比較 Baseline 和 HKGAN 的分類能力。
+    需要先執行 scripts/export_predictions_for_roc.py 來生成預測資料。
+
+    使用方法:
+        # 先匯出預測資料
+        python scripts/export_predictions_for_roc.py --all
+
+        # 再繪製 ROC 曲線
+        python experiments/plot_thesis_figures.py --figure roc
+    """
+    from sklearn.metrics import roc_curve, auc
+    from sklearn.preprocessing import label_binarize
+
+    pred_data = get_predictions_data()
+
+    if not pred_data:
+        print("錯誤: 沒有找到預測資料")
+        print("請先執行: python scripts/export_predictions_for_roc.py --all")
+        return
+
+    # 整理資料：按資料集分組
+    datasets_with_data = []
+    for ds in DATASETS_ORDER:
+        hkgan_key = f"{ds}_improved"
+        baseline_key = f"{ds}_baseline"
+        if hkgan_key in pred_data or baseline_key in pred_data:
+            datasets_with_data.append(ds)
+
+    if not datasets_with_data:
+        print("錯誤: 沒有找到有效的預測資料")
+        return
+
+    n_datasets = len(datasets_with_data)
+
+    # 決定子圖佈局
+    if n_datasets <= 3:
+        n_rows, n_cols = 1, n_datasets
+        figsize = (5 * n_datasets, 5)
+    elif n_datasets <= 6:
+        n_rows, n_cols = 2, 3
+        figsize = (15, 10)
+    else:
+        n_rows, n_cols = 3, 3
+        figsize = (15, 15)
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    if n_datasets == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+
+    # 顏色設定
+    baseline_color = '#4472C4'
+    hkgan_color = '#70AD47'
+
+    print("\nROC Curve Data:")
+    print("-" * 60)
+
+    for i, ds in enumerate(datasets_with_data):
+        ax = axes[i]
+
+        hkgan_key = f"{ds}_improved"
+        baseline_key = f"{ds}_baseline"
+
+        # 繪製對角線（隨機分類器）
+        ax.plot([0, 1], [0, 1], 'k--', linewidth=1, alpha=0.5, label='Random (AUC=0.50)')
+
+        auc_values = {}
+
+        # 繪製 Baseline ROC
+        if baseline_key in pred_data:
+            data = pred_data[baseline_key]
+            y_true = data['y_true']
+            y_probs = data['y_probs']
+
+            # 二值化標籤 (One-vs-Rest)
+            y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
+
+            # 計算 micro-average ROC
+            fpr, tpr, _ = roc_curve(y_true_bin.ravel(), y_probs.ravel())
+            roc_auc = auc(fpr, tpr)
+            auc_values['baseline'] = roc_auc
+
+            ax.plot(fpr, tpr, color=baseline_color, linewidth=2.5,
+                    label=f'Baseline (AUC={roc_auc:.3f})')
+            ax.fill_between(fpr, tpr, alpha=0.1, color=baseline_color)
+
+        # 繪製 HKGAN ROC
+        if hkgan_key in pred_data:
+            data = pred_data[hkgan_key]
+            y_true = data['y_true']
+            y_probs = data['y_probs']
+
+            y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
+
+            fpr, tpr, _ = roc_curve(y_true_bin.ravel(), y_probs.ravel())
+            roc_auc = auc(fpr, tpr)
+            auc_values['hkgan'] = roc_auc
+
+            ax.plot(fpr, tpr, color=hkgan_color, linewidth=2.5,
+                    label=f'HKGAN (AUC={roc_auc:.3f})')
+            ax.fill_between(fpr, tpr, alpha=0.1, color=hkgan_color)
+
+        # 設定標題
+        if 'baseline' in auc_values and 'hkgan' in auc_values:
+            improvement = (auc_values['hkgan'] - auc_values['baseline']) * 100
+            sign = '+' if improvement >= 0 else ''
+            ax.set_title(f'{DISPLAY_NAMES[ds]}\n({sign}{improvement:.2f}% improvement)',
+                         fontsize=12, fontweight='bold')
+            print(f"  {ds}: Baseline AUC={auc_values['baseline']:.4f}, HKGAN AUC={auc_values['hkgan']:.4f}, Δ={sign}{improvement:.2f}%")
+        else:
+            ax.set_title(DISPLAY_NAMES[ds], fontsize=12, fontweight='bold')
+
+        ax.set_xlabel('False Positive Rate', fontsize=10)
+        ax.set_ylabel('True Positive Rate', fontsize=10)
+        ax.set_xlim([-0.02, 1.02])
+        ax.set_ylim([-0.02, 1.02])
+        ax.grid(True, linestyle='--', alpha=0.3)
+        ax.legend(loc='lower right', fontsize=9, framealpha=0.9)
+        ax.set_xticks(np.arange(0, 1.1, 0.2))
+        ax.set_yticks(np.arange(0, 1.1, 0.2))
+
+    # 隱藏多餘的子圖
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+
+    fig.suptitle('ROC Curves: HKGAN vs Baseline across Datasets\n(Micro-average, One-vs-Rest)',
+                 fontsize=14, fontweight='bold', y=1.02)
+
+    plt.tight_layout()
+
+    if output_path:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=300, bbox_inches='tight',
+                    facecolor='white', edgecolor='none')
+        print(f"\n圖表已保存至: {output_path}")
+
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='論文圖檔生成工具 - HKGAN 實驗結果視覺化',
@@ -799,7 +1003,7 @@ def main():
         """
     )
     parser.add_argument('--figure', '-f', type=str, default='all',
-                        choices=['f1', 'auc', 'neutral', 'boxplot', 'all'],
+                        choices=['f1', 'auc', 'neutral', 'boxplot', 'roc', 'all'],
                         help='要生成的圖表類型 (default: all)')
     parser.add_argument('--output', '-o', type=str, default=None,
                         help='輸出路徑（目錄或檔案）')
@@ -862,6 +1066,20 @@ def main():
             plot_f1_boxplot(output_path=output_path, show=show)
         else:
             plot_f1_boxplot(show=show)
+
+    if args.figure in ['roc', 'all']:
+        print("\n" + "-" * 60)
+        print("生成 ROC 曲線圖...")
+        print("-" * 60)
+        print("注意: 需要先執行 python scripts/export_predictions_for_roc.py --all")
+        if args.output:
+            output_path = Path(args.output)
+            if output_path.is_dir() or args.figure == 'all':
+                output_path = Path(args.output) / "roc_curves.png"
+            plot_roc_curves(output_path=output_path, show=show)
+        else:
+            # 預設輸出到 results/figures/
+            plot_roc_curves(output_path=Path("results/figures/roc_curves.png"), show=show)
 
     print("\n" + "=" * 60)
     print("圖檔生成完成！")

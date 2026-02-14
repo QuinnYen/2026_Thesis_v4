@@ -15,6 +15,20 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+# 數據集顯示名稱
+DISPLAY_NAMES = {
+    'rest16': 'REST16',
+    'restaurants': 'REST14',
+    'laptops': 'LAP14',
+    'lap16': 'LAP16',
+    'mams': 'MAMS'
+}
+
+
+def get_display_name(dataset):
+    """取得數據集的顯示名稱"""
+    return DISPLAY_NAMES.get(dataset, dataset.upper())
+
 
 def find_experiments(results_dir, dataset):
     """查找 Baseline 和 HKGAN 實驗"""
@@ -133,9 +147,10 @@ def read_metrics(exp_dir):
 
 def generate_report(dataset, baseline_metrics, hkgan_metrics):
     """生成對比報告"""
+    display_name = get_display_name(dataset)
     report = []
     report.append("=" * 80)
-    report.append(f"HKGAN vs Baseline 對比報告 - {dataset.upper()} Dataset")
+    report.append(f"HKGAN vs Baseline 對比報告 - {display_name} Dataset")
     report.append("=" * 80)
     report.append(f"生成時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     report.append("")
@@ -303,11 +318,11 @@ def generate_report(dataset, baseline_metrics, hkgan_metrics):
 
         # 結論
         if f1_diff > 0:
-            report.append(f"  ✓ HKGAN 在 {dataset.upper()} 數據集上超越 Baseline {f1_diff:.2f}% (Macro-F1)")
+            report.append(f"  ✓ HKGAN 在 {display_name} 數據集上超越 Baseline {f1_diff:.2f}% (Macro-F1)")
         elif f1_diff < 0:
-            report.append(f"  ✗ HKGAN 在 {dataset.upper()} 數據集上低於 Baseline {abs(f1_diff):.2f}% (Macro-F1)")
+            report.append(f"  ✗ HKGAN 在 {display_name} 數據集上低於 Baseline {abs(f1_diff):.2f}% (Macro-F1)")
         else:
-            report.append(f"  = HKGAN 與 Baseline 在 {dataset.upper()} 數據集上持平")
+            report.append(f"  = HKGAN 與 Baseline 在 {display_name} 數據集上持平")
 
     report.append("")
     report.append("=" * 80)
@@ -336,7 +351,8 @@ def main():
         parser.error("請指定 --dataset 或 --all")
 
     for dataset in datasets:
-        print(f"\n處理 {dataset.upper()} 數據集...")
+        display_name = get_display_name(dataset)
+        print(f"\n處理 {display_name} 數據集...")
 
         experiments = find_experiments(results_dir, dataset)
         baseline_metrics = read_metrics(experiments['baseline'])
@@ -352,7 +368,7 @@ def main():
         print(report)
 
         # 保存報告
-        output_file = reports_dir / f"HKGAN報告_{dataset}.txt"
+        output_file = reports_dir / f"HKGAN報告_{display_name}.txt"
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(report)
         print(f"\n報告已保存至: {output_file}")

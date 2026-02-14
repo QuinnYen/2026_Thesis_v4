@@ -1,54 +1,21 @@
 """
 批次執行實驗腳本
 
-支持的數據集:
-    - restaurants: SemEval-2014 Restaurants
-    - laptops: SemEval-2014 Laptops
-    - mams: MAMS (100% multi-aspect)
-    - rest16: SemEval-2016 Restaurants
-    - lap16: SemEval-2016 Laptops
-
 使用方法:
-    # HKGAN 模式 (推薦): 執行 HKGAN 實驗
-    python run_experiments.py --hkgan --dataset restaurants
-    python run_experiments.py --hkgan --dataset laptops
-    python run_experiments.py --hkgan --dataset mams
-    python run_experiments.py --hkgan --dataset rest16
-    python run_experiments.py --hkgan --dataset lap16
-
-    # 多種子實驗模式 (驗證魯棒性):
-    python run_experiments.py --full-baseline --multi-seed
-    python run_experiments.py --hkgan --dataset laptops --multi-seed
-    python run_experiments.py --hkgan --dataset restaurants --multi-seed
-    python run_experiments.py --hkgan --dataset mams --multi-seed
-    python run_experiments.py --hkgan --dataset rest16 --multi-seed
-    python run_experiments.py --hkgan --dataset lap16 --multi-seed
-    # 使用種子: 42, 123, 2023, 999, 0
-
     # 全 HKGAN 模式: 對所有數據集執行 HKGAN
     python run_experiments.py --hkgan --full-run
 
-    # 全 HKGAN 多種子模式: 對所有數據集執行多種子 HKGAN
+    # 全 HKGAN 多種子模式: 對所有數據集執行多種子 HKGAN (種子: 42, 123, 2023, 999, 0)
     python run_experiments.py --hkgan --full-run --multi-seed
-
-    # Baseline 模式: 執行 Baseline 實驗
-    python run_experiments.py --baseline --dataset restaurants
-    python run_experiments.py --baseline --dataset laptops
 
     # 全基線模式: 對所有數據集執行 Baseline
     python run_experiments.py --full-baseline
-    
+
     # 只生成報告
-    python run_experiments.py --report-only --dataset restaurants
+    python run_experiments.py --report-only
 
     # 統計顯著性檢驗模式
     python run_experiments.py --significance-test
-
-數據集說明:
-    - SemEval-2014: 標準 ABSA 格式 (aspectTerm)
-    - SemEval-2016 Rest16: 有明確目標屬性
-    - SemEval-2016 Lap16: 只有 category 屬性 (LAPTOP#GENERAL 格式)
-    - MAMS: 100% 多面向句子，每個面向可能有不同情感
 """
 
 import subprocess
@@ -64,6 +31,20 @@ MULTI_SEED_LIST = [42, 123, 2023, 999, 0]
 
 # 所有支援的數據集
 ALL_DATASETS = ['restaurants', 'laptops', 'mams', 'rest16', 'lap16']
+
+# 數據集顯示名稱
+DISPLAY_NAMES = {
+    'rest16': 'REST16',
+    'restaurants': 'REST14',
+    'laptops': 'LAP14',
+    'lap16': 'LAP16',
+    'mams': 'MAMS'
+}
+
+
+def get_display_name(dataset):
+    """取得數據集的顯示名稱"""
+    return DISPLAY_NAMES.get(dataset, dataset.upper())
 
 
 def run_experiment(config_path, description, dataset, seed_override=None):
@@ -117,6 +98,31 @@ def generate_hkgan_report(dataset):
         return False
 
 
+def generate_thesis_figures():
+    """生成論文圖表（包含 ROC 曲線）"""
+    cmd = [
+        sys.executable,
+        "experiments/plot_thesis_figures.py",
+        "--figure", "all",
+        "--output", "results/figures/",
+        "--no-show"
+    ]
+
+    try:
+        print(f"\n{'='*60}")
+        print("生成論文圖表（含 ROC 曲線）...")
+        print(f"{'='*60}\n")
+        subprocess.run(cmd, check=True)
+        print(f"\n✓ 圖表已保存至 results/figures/")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"\n✗ Figure generation FAILED (code: {e.returncode})\n")
+        return False
+    except KeyboardInterrupt:
+        print(f"\nInterrupted")
+        return False
+
+
 def run_baseline_only(dataset, multi_seed=False):
     """執行基線實驗 (只有 Baseline)
 
@@ -136,7 +142,7 @@ def run_baseline_only(dataset, multi_seed=False):
 
     # 單種子模式
     print(f"\n{'='*60}")
-    print(f"[Baseline Mode] Running on {dataset.upper()}")
+    print(f"[Baseline Mode] Running on {get_display_name(dataset)}")
     print(f"{'='*60}\n")
 
     print(f"[1/1] Running Baseline: BERT-CLS...")
@@ -158,7 +164,7 @@ def run_multi_seed_baseline(dataset, config_path):
     seeds = MULTI_SEED_LIST
 
     print(f"\n{'='*80}")
-    print(f"[Multi-Seed Baseline Mode] Running on {dataset.upper()}")
+    print(f"[Multi-Seed Baseline Mode] Running on {get_display_name(dataset)}")
     print(f"Seeds: {seeds}")
     print(f"{'='*80}\n")
 
@@ -227,7 +233,7 @@ def generate_baseline_multiseed_report(dataset, results):
 
     report = []
     report.append("=" * 80)
-    report.append(f"Baseline 多種子實驗報告 - {dataset.upper()} Dataset")
+    report.append(f"Baseline 多種子實驗報告 - {get_display_name(dataset)} Dataset")
     report.append("=" * 80)
     report.append(f"Seeds: {[r['seed'] for r in results]}")
     report.append(f"Runs: {len(results)}")
@@ -292,7 +298,7 @@ def run_statistical_significance_test():
 
     for dataset in ALL_DATASETS:
         print(f"\n{'-'*70}")
-        print(f"Dataset: {dataset.upper()}")
+        print(f"Dataset: {get_display_name(dataset)}")
         print(f"{'-'*70}")
 
         # 收集配對數據
@@ -431,7 +437,7 @@ def generate_significance_report(all_results):
         if r['significant_f1']:
             significant_count += 1
         delta_str = f"{r['f1_improvement']:+.2f}"
-        report.append(f"{r['dataset'].upper():<15} {r['n_pairs']:<5} {r['baseline_f1_mean']:<14.2f} {r['hkgan_f1_mean']:<14.2f} {delta_str:<10} {r['t_stat_f1']:<10.3f} {r['p_value_f1']:<12.4f} {r['cohens_d_f1']:<12.3f} {sig_str:<12}")
+        report.append(f"{get_display_name(r['dataset']):<15} {r['n_pairs']:<5} {r['baseline_f1_mean']:<14.2f} {r['hkgan_f1_mean']:<14.2f} {delta_str:<10} {r['t_stat_f1']:<10.3f} {r['p_value_f1']:<12.4f} {r['cohens_d_f1']:<12.3f} {sig_str:<12}")
 
     report.append("-" * 100)
     report.append("")
@@ -479,7 +485,7 @@ def run_hkgan_experiments(dataset, multi_seed=False):
 
     # 單種子模式
     print(f"\n{'='*60}")
-    print(f"[HKGAN Mode] Running on {dataset.upper()}")
+    print(f"[HKGAN Mode] Running on {get_display_name(dataset)}")
     print(f"{'='*60}\n")
 
     print(f"[1/1] Running HKGAN...")
@@ -502,7 +508,7 @@ def run_multi_seed_hkgan(dataset, config_path):
     seeds = MULTI_SEED_LIST
 
     print(f"\n{'='*80}")
-    print(f"[Multi-Seed HKGAN Mode] Running on {dataset.upper()}")
+    print(f"[Multi-Seed HKGAN Mode] Running on {get_display_name(dataset)}")
     print(f"Seeds: {seeds}")
     print(f"{'='*80}\n")
 
@@ -628,7 +634,7 @@ def generate_multi_seed_report(dataset, results):
 
     report = []
     report.append("=" * 80)
-    report.append(f"HKGAN 多種子實驗報告 - {dataset.upper()} Dataset")
+    report.append(f"HKGAN 多種子實驗報告 - {get_display_name(dataset)} Dataset")
     report.append("=" * 80)
     report.append(f"Seeds: {[r['seed'] for r in results]}")
     report.append(f"Runs: {len(results)}")
@@ -681,9 +687,9 @@ def generate_multi_seed_report(dataset, results):
         report.append(f"  Pos F1:    {diff_str(pos_diff)}")
 
         if f1_diff > 0:
-            report.append(f"\n  ✓ HKGAN 在 {dataset.upper()} 上超越 Baseline {f1_diff:.2f}% (Macro-F1)")
+            report.append(f"\n  ✓ HKGAN 在 {get_display_name(dataset)} 上超越 Baseline {f1_diff:.2f}% (Macro-F1)")
         else:
-            report.append(f"\n  ✗ HKGAN 在 {dataset.upper()} 上未能超越 Baseline")
+            report.append(f"\n  ✗ HKGAN 在 {get_display_name(dataset)} 上未能超越 Baseline")
 
     report.append("")
     report.append("-" * 80)
@@ -773,11 +779,14 @@ def main():
 
     # 只生成報告模式
     if args.report_only:
+        # 生成各數據集報告
         if args.dataset:
             generate_hkgan_report(args.dataset)
         else:
             for dataset in ALL_DATASETS:
                 generate_hkgan_report(dataset)
+        # 生成論文圖表（包含 ROC 曲線）
+        generate_thesis_figures()
         return
 
     # 全基線模式
@@ -793,7 +802,7 @@ def main():
         results = {}
         for dataset in ALL_DATASETS:
             print(f"\n{'#'*80}")
-            print(f"# Dataset: {dataset.upper()}")
+            print(f"# Dataset: {get_display_name(dataset)}")
             print(f"{'#'*80}")
 
             success = run_baseline_only(dataset, multi_seed=args.multi_seed)
@@ -804,7 +813,7 @@ def main():
         print(f"[Full {mode_str} Summary] All datasets completed")
         print(f"{'='*80}")
         for dataset, status in results.items():
-            print(f"  {dataset.upper():12s}: {mode_str} {status}")
+            print(f"  {get_display_name(dataset):12s}: {mode_str} {status}")
         print(f"{'='*80}\n")
         return
 
@@ -821,7 +830,7 @@ def main():
         results = {}
         for dataset in ALL_DATASETS:
             print(f"\n{'#'*80}")
-            print(f"# Dataset: {dataset.upper()}")
+            print(f"# Dataset: {get_display_name(dataset)}")
             print(f"{'#'*80}")
 
             success = run_hkgan_experiments(dataset, multi_seed=args.multi_seed)
@@ -832,7 +841,7 @@ def main():
         print(f"[Full {mode_str} Summary] All datasets completed")
         print(f"{'='*80}")
         for dataset, status in results.items():
-            print(f"  {dataset.upper():12s}: {mode_str} {status}")
+            print(f"  {get_display_name(dataset):12s}: {mode_str} {status}")
         print(f"{'='*80}\n")
         return
 

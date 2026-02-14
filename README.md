@@ -1,380 +1,287 @@
-# HMAC-Net: 面向級情感分析實驗框架
+# HKGAN: Hierarchical Knowledge-enhanced Graph Attention Network
 
-HMAC-Net (Hierarchical Multi-Aspect Composition Network) 是一個用於面向級情感分析的深度學習模型，整合了三個核心創新模組。
+面向級情感分析 (Aspect-Level Sentiment Analysis) 深度學習框架，整合階層式 BERT 特徵提取與 SenticNet 情感知識庫。
 
-## 📋 目錄
+## 核心創新
 
-- [專案結構](#專案結構)
-- [核心模組](#核心模組)
-- [安裝](#安裝)
-- [快速開始](#快速開始)
-- [配置說明](#配置說明)
-- [數據準備](#數據準備)
-- [訓練模型](#訓練模型)
-- [實驗功能](#實驗功能)
+### 1. 階層式 BERT 特徵提取
+- **Low/Mid/High 層級**: 從 BERT 不同層提取互補語義特徵
+- **動態層級融合**: 自動學習最佳層級組合權重
+
+### 2. SenticNet 知識增強
+- **情感極性注入**: 將外部情感知識融入注意力計算
+- **動態知識門控 (v3.0)**: 根據上下文自動決定是否信任外部知識
+  - 簡單句: Gate 高，充分利用 SenticNet
+  - 複雜句 (含轉折詞): Gate 低，依賴 BERT 上下文
+
+### 3. 純 PyTorch 圖注意力網路
+- **多頭 GAT**: 不依賴 torch_geometric 的純 PyTorch 實現
+- **跨面向關係建模 (IARN)**: 捕捉同句多面向間的情感依賴
+
+### 4. 情感隔離機制 (v2.2+)
+- **情感感知隔離**: 防止強烈情感透過 IARN 流向中性面向
+- **解決蹺蹺板效應**: 動態調整隔離程度
 
 ## 專案結構
 
 ```
-HMAC-Net/
-├── data/                      # 數據目錄
-│   ├── raw/                  # 原始數據（SemEval-2014 等）
-│   ├── processed/            # 預處理後數據
-│   └── embeddings/           # 詞嵌入（GloVe）
+HKGAN/
+├── configs/                    # 配置檔案
+│   ├── unified_hkgan.yaml     # HKGAN 模型配置
+│   └── unified_baseline.yaml  # Baseline 配置
 │
-├── models/                    # 模型定義
-│   ├── base_model.py         # 基礎模型類
-│   ├── aaha.py               # AAHA 模組（階層式注意力）
-│   ├── pmac.py               # PMAC 模組（多面向組合）
-│   ├── iarm.py               # IARM 模組（面向間關係）
-│   ├── hmac_net.py           # 完整 HMAC-Net
-│   └── baselines.py          # Baseline 模型
+├── data/                       # 數據目錄
+│   ├── raw/                   # 原始數據 (SemEval-2014/2016, MAMS)
+│   ├── dapt/                  # Domain-Adaptive Pre-Training 模型
+│   └── SenticNet_5.0/         # SenticNet 情感知識庫
 │
-├── utils/                     # 工具模組
-│   ├── logger.py             # 日誌記錄
-│   ├── metrics.py            # 評估指標
-│   ├── preprocessor.py       # 數據預處理
-│   ├── data_loader.py        # 數據載入器
-│   └── visualization.py      # 視覺化
+├── models/                     # 模型定義
+│   ├── hkgan.py               # HKGAN 主模型
+│   ├── bert_embedding.py      # BERT 特徵提取器
+│   ├── hierarchical_syntax.py # 階層式語法模組
+│   └── base_model.py          # 基礎模型類
 │
-├── experiments/               # 實驗腳本
-│   ├── train.py              # 訓練腳本
-│   ├── evaluate.py           # 評估腳本
-│   ├── ablation_study.py     # 消融實驗
-│   └── compare_baselines.py  # Baseline 比較
+├── experiments/                # 實驗腳本
+│   ├── train_from_config.py   # 統一訓練入口
+│   ├── train_multiaspect.py   # 多面向訓練
+│   ├── improved_models.py     # 改進模型實現
+│   ├── baselines.py           # Baseline 模型
+│   ├── generate_hkgan_report.py      # HKGAN 報告生成
+│   ├── generate_ablation_report.py   # 消融實驗報告
+│   └── plot_thesis_figures.py        # 論文圖表繪製
 │
-├── configs/                   # 配置檔案
-│   ├── model_config.yaml     # 模型超參數
-│   ├── experiment_config.yaml # 實驗配置
-│   └── data_config.yaml      # 數據配置
+├── utils/                      # 工具模組
+│   ├── focal_loss.py          # Focal Loss 實現
+│   ├── senticnet_loader.py    # SenticNet 載入器
+│   ├── dataset_analyzer.py    # 數據集分析
+│   └── model_selector.py      # 模型選擇器
 │
-├── results/                   # 實驗結果
-│   ├── checkpoints/          # 模型檢查點
-│   ├── logs/                 # 訓練日誌
-│   ├── visualizations/       # 視覺化圖表
-│   └── reports/              # 實驗報告
+├── results/                    # 實驗結果
+│   ├── improved/              # HKGAN 實驗結果
+│   ├── baseline/              # Baseline 結果
+│   ├── ablation/              # 消融實驗結果
+│   └── figures/               # 生成的圖表
 │
-└── requirements.txt           # 依賴套件
+├── run_experiments.py          # 批次實驗執行腳本
+├── run_ablation.py            # 消融實驗腳本
+└── requirements.txt            # 依賴套件
 ```
-
-## 核心模組
-
-### 1. AAHA (Aspect-Aware Hierarchical Attention)
-**面向感知階層式注意力**
-
-- **詞級注意力**：關注單個詞與面向的關聯
-- **片語級注意力**：使用 CNN 提取局部片語特徵
-- **句子級注意力**：使用雙向 LSTM 捕捉全局資訊
-- **動態層級融合**：自動學習三層注意力的最佳組合
-
-### 2. PMAC (Progressive Multi-Aspect Composition)
-**漸進式多面向組合**
-
-- **多粒度表示**：從不同粒度提取面向特徵
-- **門控融合機制**：動態控制特徵融合比例
-- **漸進式組合**：逐步組合多個面向資訊
-
-### 3. IARM (Inter-Aspect Relation Modeling)
-**面向間關係建模**
-
-- **圖注意力網路**：建模面向之間的依賴關係
-- **Transformer 式交互**：使用自注意力機制
-- **關係增強表示**：生成關係感知的面向表示
 
 ## 安裝
 
 ### 環境要求
 - Python 3.8+
 - PyTorch 2.0+
-- CUDA 11.0+ (GPU 加速，可選)
+- CUDA 11.0+ (GPU 加速)
 
 ### 安裝步驟
 
 ```bash
-# 克隆專案
-cd HMAC-Net
+# 進入專案目錄
+cd HKGAN
+
+# 建立虛擬環境
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+# source .venv/bin/activate  # Linux/Mac
 
 # 安裝依賴
 pip install -r requirements.txt
-
-# （可選）安裝 spaCy 語言模型
-python -m spacy download en_core_web_sm
 ```
+
+## 數據集
+
+支援以下面向級情感分析數據集：
+
+| 數據集 | 代碼 | 領域 | 說明 |
+|--------|------|------|------|
+| SemEval-2014 Restaurant | `restaurants` / `REST14` | 餐廳 | 標準評測集 |
+| SemEval-2014 Laptop | `laptops` / `LAP14` | 筆電 | 標準評測集 |
+| SemEval-2016 Restaurant | `rest16` / `REST16` | 餐廳 | 擴展評測集 |
+| SemEval-2016 Laptop | `lap16` / `LAP16` | 筆電 | 擴展評測集 |
+| MAMS | `mams` | 餐廳 | 多面向挑戰集 |
 
 ## 快速開始
 
-### 1. 準備數據
-
-將 SemEval-2014 數據放入 `data/raw/semeval2014/` 目錄：
-
-```
-data/raw/semeval2014/
-├── restaurant_train.xml
-├── restaurant_test.xml
-├── laptop_train.xml
-└── laptop_test.xml
-```
-
-### 2. 下載詞嵌入
-
-下載 GloVe 詞嵌入並放入 `data/embeddings/`：
+### 單一數據集訓練
 
 ```bash
-# 下載 GloVe 840B 300d
-wget http://nlp.stanford.edu/data/glove.840B.300d.zip
-unzip glove.840B.300d.zip -d data/embeddings/
+# HKGAN 模式 (預設)
+python run_experiments.py --dataset restaurants --hkgan
+
+# Baseline 模式 (BERT-CLS)
+python run_experiments.py --dataset restaurants --baseline
 ```
 
-### 3. 訓練模型
+### 全數據集批次執行
 
 ```bash
-# 使用默認配置訓練
-python experiments/train.py
+# 對所有數據集執行 HKGAN
+python run_experiments.py --hkgan --full-run
 
-# 使用自定義配置
-python experiments/train.py --config configs/experiment_config.yaml
+# 對所有數據集執行 Baseline
+python run_experiments.py --full-baseline
 ```
 
-### 4. 評估模型
+### 多種子實驗 (統計驗證)
 
 ```bash
-# 評估最佳模型
-python experiments/evaluate.py --checkpoint results/checkpoints/hmac_net_best.pt
+# 多種子 HKGAN (seeds: 42, 123, 2023, 999, 0)
+python run_experiments.py --hkgan --full-run --multi-seed
+
+# 多種子 Baseline
+python run_experiments.py --full-baseline --multi-seed
+```
+
+### 統計顯著性檢驗
+
+```bash
+# Paired t-test 比較 HKGAN vs Baseline
+python run_experiments.py --significance-test
+```
+
+### 生成報告與圖表
+
+```bash
+# 生成所有報告 (含 ROC 曲線)
+python run_experiments.py --report-only
 ```
 
 ## 配置說明
 
-### 模型配置 (`configs/model_config.yaml`)
+### 模型配置 (`configs/unified_hkgan.yaml`)
 
 ```yaml
 model:
-  embedding_dim: 300        # 詞嵌入維度
-  hidden_dim: 256           # 隱藏層維度
-  num_layers: 2             # LSTM 層數
-  dropout: 0.5              # Dropout 比率
+  improved: "hkgan"
+  bert_model:
+    laptops: "data/dapt/laptop_dapt/final"
+    restaurants: "data/dapt/restaurant_dapt/final"
+    default: "bert-base-uncased"
+  hidden_dim: 768
+  dropout: 0.3
 
-aaha:
-  word_attention_dim: 128   # 詞級注意力維度
-  phrase_attention_dim: 128 # 片語級注意力維度
-  sentence_attention_dim: 128 # 句子級注意力維度
+  # GAT 參數
+  gat_heads: 4
+  gat_layers: 2
 
-pmac:
-  fusion_method: "gated"    # 融合方法
-  composition_layers: 2     # 組合層數
+  # SenticNet 知識增強
+  use_senticnet: true
+  knowledge_weight: 0.1
+  use_dynamic_gate: true    # v3.0 動態知識門控
 
-iarm:
-  relation_type: "transformer"  # 關係建模類型
-  num_heads: 4              # 注意力頭數
-```
-
-### 訓練配置 (`configs/experiment_config.yaml`)
-
-```yaml
 training:
-  batch_size: 32
-  num_epochs: 50
-  learning_rate: 0.001
-  weight_decay: 0.0001
-
-early_stopping:
-  enabled: true
-  patience: 10
-  metric: "macro_f1"
+  batch_size: 16
+  epochs: 30
+  lr: 3.0e-5
+  loss_type: "focal"
+  focal_gamma: 2.0
 ```
 
-## 數據準備
+### 訓練參數
 
-### 使用 SemEval-2014
-
-```python
-from utils import SemEvalPreprocessor, load_semeval_2014
-
-# 載入數據
-preprocessor = SemEvalPreprocessor()
-train_df, test_df = load_semeval_2014(
-    data_dir='data/raw/semeval2014',
-    domain='restaurant',
-    preprocessor=preprocessor
-)
-
-# 保存詞彙表
-preprocessor.save_vocabulary('data/processed/vocab.pkl')
-```
-
-### 自定義數據格式
-
-數據應包含以下欄位：
-- `text`: 句子文本
-- `aspect`: 面向詞
-- `polarity`: 情感極性 (positive/negative/neutral)
-
-## 訓練模型
-
-### 基本訓練
-
-```python
-from models import HMACNet
-import torch
-
-# 創建模型
-model = HMACNet(
-    vocab_size=5000,
-    embedding_dim=300,
-    hidden_dim=256,
-    num_classes=3
-)
-
-# 訓練（參見 experiments/train.py）
-```
-
-### 使用預訓練嵌入
-
-```python
-from utils import load_glove_embeddings
-
-# 載入 GloVe
-embeddings = load_glove_embeddings(
-    glove_path='data/embeddings/glove.840B.300d.txt',
-    word2idx=preprocessor.word2idx,
-    embedding_dim=300
-)
-
-# 創建模型時傳入
-model = HMACNet(
-    vocab_size=5000,
-    pretrained_embeddings=torch.from_numpy(embeddings)
-)
-```
+| 參數 | 預設值 | 說明 |
+|------|--------|------|
+| `batch_size` | 16 | 批次大小 |
+| `accumulation_steps` | 2 | 梯度累積 (等效 batch=32) |
+| `epochs` | 30 | 訓練輪數 |
+| `lr` | 3e-5 | 學習率 |
+| `patience` | 10 | Early stopping 容忍度 |
+| `loss_type` | focal | 損失函數 (focal/ce) |
 
 ## 實驗功能
 
 ### 1. 消融實驗
 
-測試各模組的貢獻：
+```bash
+python run_ablation.py
+```
+
+測試各模組貢獻：
+- **Full HKGAN**: 完整模型
+- **w/o SenticNet**: 移除知識增強
+- **w/o Dynamic Gate**: 移除動態門控
+- **w/o IARN**: 移除跨面向建模
+
+### 2. 報告生成
+
+實驗完成後自動生成：
+- `results/HKGAN報告_{dataset}.txt` - 單次實驗報告
+- `results/HKGAN_MultiSeed_{dataset}.txt` - 多種子統計報告
+- `results/Statistical_Significance_Report.txt` - 顯著性檢驗報告
+- `results/figures/roc_curves.png` - ROC 曲線圖
+
+### 3. 論文圖表
 
 ```bash
-python experiments/ablation_study.py
+python experiments/plot_thesis_figures.py --figure all --output results/figures/
 ```
 
-會測試以下變體：
-- **完整模型**：AAHA + PMAC + IARM
-- **w/o AAHA**：移除階層式注意力
-- **w/o PMAC**：移除多面向組合
-- **w/o IARM**：移除面向間關係
+## 預期性能
 
-### 2. Baseline 比較
+| 數據集 | Accuracy | Macro-F1 | 說明 |
+|--------|----------|----------|------|
+| REST14 | 85-87% | 78-81% | 標準餐廳評測 |
+| LAP14 | 80-82% | 72-75% | 標準筆電評測 |
+| REST16 | 88-90% | 72-75% | 類別不均衡挑戰 |
+| LAP16 | 82-84% | 70-73% | 類別不均衡挑戰 |
+| MAMS | 83-85% | 84-86% | 多面向複雜句 |
 
-與其他模型比較：
+## 技術特點
 
-```bash
-python experiments/compare_baselines.py
+### Focal Loss
+處理類別不均衡問題，特別針對 Neutral 類別識別：
+```yaml
+loss_type: "focal"
+focal_gamma: 2.0
+class_weights: [0.8, 1.8, 0.8]  # [Neg, Neu, Pos]
 ```
 
-包含的 Baseline：
-- LSTM
-- ATAE-LSTM
-- IAN
-- HMAC-Net（提出方法）
-
-### 3. 注意力視覺化
-
-```python
-from utils import AttentionVisualizer
-
-# 創建視覺化器
-visualizer = AttentionVisualizer()
-
-# 繪製階層式注意力
-visualizer.plot_hierarchical_attention(
-    word_attention=word_attn,
-    phrase_attention=phrase_attn,
-    sentence_attention=sentence_attn,
-    words=tokens,
-    aspect='food'
-)
+### 非對稱 Logit 調整
+推理時動態調整各類別 logits：
+```yaml
+neutral_boost:
+  laptops: 0.8
+  restaurants: 0.6
+neg_suppress:
+  laptops: 0.6
 ```
 
-## 實驗結果
-
-訓練完成後，結果會保存在 `results/` 目錄：
-
-- **檢查點**：`results/checkpoints/hmac_net_best_f1_*.pt`
-- **訓練曲線**：`results/visualizations/hmac_net_training_curves.png`
-- **混淆矩陣**：`results/visualizations/confusion_matrix.png`
-- **注意力視覺化**：`results/visualizations/attention_*.png`
-- **日誌**：`results/logs/HMAC-Net_*.log`
-
-## 進階使用
-
-### 自定義模組
-
-可以輕鬆替換或修改模組：
-
-```python
-from models import HMACNet, AAHA, PMAC, IARM
-
-# 自定義 AAHA
-class CustomAAHA(AAHA):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # 添加自定義層
-
-    def forward(self, *args, **kwargs):
-        # 自定義前向傳播
-        pass
-
-# 在 HMAC-Net 中使用
-# 修改 models/hmac_net.py 中的 self.aaha
-```
-
-### 多 GPU 訓練
-
-```python
-# 使用 DataParallel
-model = nn.DataParallel(model)
-
-# 或使用 DistributedDataParallel（推薦）
-# 參見 PyTorch 文檔
+### LLRD (Layer-wise Learning Rate Decay)
+BERT 各層使用不同學習率：
+```yaml
+use_llrd: true
+llrd_decay: 0.95
 ```
 
 ## 常見問題
 
-### Q: 如何調整超參數？
-A: 編輯 `configs/model_config.yaml` 和 `configs/experiment_config.yaml`
+### Q: GPU 記憶體不足？
+1. 減少 `batch_size` (建議 8 或 4)
+2. 增加 `accumulation_steps` 補償
+3. 減少 `max_text_len`
 
-### Q: 訓練很慢怎麼辦？
-A:
-1. 使用 GPU（設置 `use_cuda: true`）
-2. 增加 batch size
-3. 減少 LSTM 層數或隱藏層維度
+### Q: 訓練不穩定？
+1. 降低學習率 (`lr: 2e-5`)
+2. 增加 warmup (`warmup_ratio: 0.15`)
+3. 使用梯度裁剪 (`grad_clip: 1.0`)
 
-### Q: 如何處理 OOM（記憶體不足）？
-A:
-1. 減少 batch size
-2. 減少序列最大長度
-3. 使用梯度累積
-
-## 引用
-
-如果您使用了本程式碼，請引用：
-
-```bibtex
-@article{hmacnet2024,
-  title={HMAC-Net: Hierarchical Multi-Aspect Composition Network for Aspect-Level Sentiment Analysis},
-  author={Your Name},
-  journal={Your Journal},
-  year={2024}
-}
-```
+### Q: Neutral F1 過低？
+1. 調整 `neutral_boost` 參數
+2. 增加 `class_weights[1]` (Neutral 權重)
+3. 確認 `use_dynamic_gate: true`
 
 ## 授權
 
 本專案採用 MIT 授權。
 
-## 聯繫方式
+## 引用
 
-如有問題或建議，請開 Issue 或聯繫作者。
-
----
-
-**祝實驗順利！** 🚀
+```bibtex
+@article{hkgan2026,
+  title={HKGAN: Hierarchical Knowledge-enhanced Graph Attention Network
+         for Aspect-Level Sentiment Analysis},
+  author={Your Name},
+  year={2026}
+}
+```

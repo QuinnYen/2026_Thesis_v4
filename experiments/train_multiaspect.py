@@ -579,7 +579,7 @@ def analyze_gate_statistics(all_gates):
     return stats
 
 
-def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, collect_gates=False, return_confusion_matrix=False):
+def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, collect_gates=False, return_confusion_matrix=False, return_predictions=False):
     """
     評估 multi-aspect 模型
 
@@ -588,6 +588,7 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
 
     參數:
         return_confusion_matrix: 是否返回混淆矩陣（用於視覺化）
+        return_predictions: 是否返回預測資料（用於 ROC 曲線）
     """
     model.eval()
 
@@ -808,6 +809,17 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
         from sklearn.metrics import confusion_matrix
         cm = confusion_matrix(valid_labels, valid_preds, labels=[0, 1, 2])
         result['confusion_matrix'] = cm.tolist()
+
+    # 加入預測資料（用於 ROC 曲線）
+    if return_predictions:
+        result['predictions'] = {
+            'y_true': valid_labels,
+            'y_probs': [p.tolist() for p in valid_probs],
+            'y_pred': valid_preds,
+            'num_samples': len(valid_labels),
+            'num_classes': 3,
+            'class_names': ['Negative', 'Neutral', 'Positive']
+        }
 
     return result
 
@@ -1424,7 +1436,8 @@ def train_multiaspect_model(args):
     test_metrics = evaluate_multi_aspect(
         model, test_loader, device, loss_fn_for_eval, args,
         collect_gates=False,
-        return_confusion_matrix=True  # 收集混淆矩陣用於視覺化
+        return_confusion_matrix=True,  # 收集混淆矩陣用於視覺化
+        return_predictions=True  # 收集預測資料用於 ROC 曲線
     )
 
     # 簡化的測試結果輸出
@@ -1443,13 +1456,13 @@ def train_multiaspect_model(args):
         bw = test_metrics['branch_weights']
         print(f"  Branch Weights: Hier={bw['Hierarchical']:.3f} HSA={bw['HSA']:.3f} IARN={bw['IARN']:.3f}")
 
-    # 保存結果
+    # 保存結果（排除 predictions，因為它會單獨保存到 predictions_for_roc.json）
     results = {
         'args': vars(args),
         'best_val_f1': float(best_val_f1),
         'history': history,
         'test_metrics': {k: float(v) if isinstance(v, (float, np.float32, np.float64)) else v
-                        for k, v in test_metrics.items()}
+                        for k, v in test_metrics.items() if k != 'predictions'}
     }
 
     # 單獨保存 layer_attention 到頂層，方便報告生成器讀取
@@ -1471,6 +1484,13 @@ def train_multiaspect_model(args):
     config_path = reports_dir / 'experiment_config.json'
     with open(config_path, 'w') as f:
         json.dump(vars(args), f, indent=2, default=str)
+
+    # 保存 ROC 曲線用的預測資料
+    if 'predictions' in test_metrics:
+        roc_path = reports_dir / 'predictions_for_roc.json'
+        with open(roc_path, 'w', encoding='utf-8') as f:
+            json.dump(test_metrics['predictions'], f, indent=2)
+        print(f"  ROC data saved: {roc_path.name}")
 
     # 自動生成訓練曲線圖表（靜默模式）
     try:
