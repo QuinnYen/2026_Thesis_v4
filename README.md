@@ -269,7 +269,7 @@ python tests/cleanup_checkpoints.py --execute
 @article{hkgan2026,
   title={HKGAN: Hierarchical Knowledge-enhanced Graph Attention Network
          for Aspect-Level Sentiment Analysis},
-  author={Your Name},
+  author={Kuan Yen},
   year={2026}
 }
 ```
