@@ -879,6 +879,10 @@ def train_multiaspect_model(args):
     print(f"  Output: {exp_dir.name}")
 
     # ========== HKGAN v2.0/v3.0: 處理 Confidence Gate、Dynamic Gate 和 Domain 參數 ==========
+    # 如果使用 --no_senticnet，覆蓋 use_senticnet（消融實驗用）
+    if args.no_senticnet:
+        args.use_senticnet = False
+
     # 如果使用 --no_confidence_gate，覆蓋 use_confidence_gate
     if args.no_confidence_gate:
         args.use_confidence_gate = False
@@ -1335,6 +1339,13 @@ def train_multiaspect_model(args):
                             )
                             loss = loss + contrastive_loss
 
+                # Gate 開啟正則化：懲罰 gate_values 趨近 0，強迫知識訊號進入模型
+                if (getattr(args, 'gate_reg_weight', 0.0) > 0.0
+                        and extras is not None
+                        and 'gate_values_grad' in extras):
+                    gate_reg = -extras['gate_values_grad'].mean()
+                    loss = loss + args.gate_reg_weight * gate_reg
+
                 # 梯度累積：將 loss 除以累積步數
                 loss = loss / args.accumulation_steps
 
@@ -1628,8 +1639,12 @@ def main():
                         help='HKGAN: GAT 層數')
     parser.add_argument('--knowledge_weight', type=float, default=0.1,
                         help='HKGAN: SenticNet 知識注入權重')
+    parser.add_argument('--gate_reg_weight', type=float, default=0.0,
+                        help='HKGAN: Gate 開啟正則化強度（0=關閉，建議從 0.02 開始）')
     parser.add_argument('--use_senticnet', action='store_true', default=True,
                         help='HKGAN: 是否使用 SenticNet 知識增強')
+    parser.add_argument('--no_senticnet', action='store_true', default=False,
+                        help='HKGAN: 禁用 SenticNet 知識增強（消融實驗用）')
 
     # HKGAN v2.0 新增：Neutral 識別改進
     parser.add_argument('--use_confidence_gate', action='store_true', default=True,

@@ -813,6 +813,7 @@ class HierarchicalGATLayer(nn.Module):
             avg_gate = torch.stack(all_gate_values, dim=0).mean(dim=0)  # [batch, seq_len]
             extras['confidence_gate_values'] = avg_gate.detach().cpu()
             extras['avg_confidence_gate'] = avg_gate.mean().item()
+            extras['gate_values_grad'] = avg_gate  # 保留梯度用於 Gate 正則化（不 detach）
 
         return h_out, extras
 

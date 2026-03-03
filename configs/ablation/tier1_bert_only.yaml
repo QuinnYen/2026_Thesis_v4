@@ -10,15 +10,10 @@ experiment_name: "ablation_bert_only"
 
 model:
   # 使用 baseline 模式而非 improved 模式
-  baseline: "bert-cls"
+  baseline: "bert_cls"
   improved: null
 
-  bert_model:
-    laptops: "data/dapt/laptop_dapt/final"
-    lap16: "data/dapt/laptop_dapt/final"
-    restaurants: "data/dapt/restaurant_dapt/final"
-    rest16: "data/dapt/restaurant_dapt/final"
-    default: "bert-base-uncased"
+  bert_model: "bert-base-uncased"
   freeze_bert: false
   hidden_dim: 768
   dropout: 0.3
@@ -46,8 +41,9 @@ training:
   use_scheduler: true
   warmup_ratio: 0.1
 
-  # 使用標準 CrossEntropy（不使用任何 loss engineering）
-  loss_type: "ce"
+  # 與其他消融變體對齊，使用 Focal Loss
+  loss_type: "focal"
+  focal_gamma: 2.0
   class_weights: [1.0, 1.0, 1.0]
 
   virtual_weight: 0.5

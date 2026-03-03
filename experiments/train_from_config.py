@@ -118,8 +118,14 @@ def config_to_args(config, dataset=None):
         if 'knowledge_weight' in model_cfg:
             args.extend(['--knowledge_weight', str(model_cfg['knowledge_weight'])])
 
-        if model_cfg.get('use_senticnet'):
-            args.append('--use_senticnet')
+        if 'gate_reg_weight' in model_cfg:
+            args.extend(['--gate_reg_weight', str(model_cfg['gate_reg_weight'])])
+
+        if 'use_senticnet' in model_cfg:
+            if model_cfg['use_senticnet']:
+                args.append('--use_senticnet')
+            else:
+                args.append('--no_senticnet')
 
         # HKGAN v2.0 新增：Neutral 識別改進
         if 'use_confidence_gate' in model_cfg:
