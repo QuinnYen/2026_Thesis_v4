@@ -16,6 +16,9 @@
 
     # 統計顯著性檢驗模式
     python run_experiments.py --significance-test
+
+    # 實驗結束後自動清理多餘 checkpoint（加 --auto-cleanup）
+    python run_experiments.py --hkgan --full-run --multi-seed --auto-cleanup
 """
 
 import subprocess
@@ -25,6 +28,7 @@ import sys
 import json
 import numpy as np
 from scipy import stats
+from utils.checkpoint_cleaner import run_cleanup, print_cleanup_summary
 
 # 多種子實驗用的種子列表
 MULTI_SEED_LIST = [42, 123, 2023, 999, 0]
@@ -769,6 +773,8 @@ def main():
                         help='只生成報告，不執行實驗')
     parser.add_argument('--significance-test', action='store_true',
                         help='執行統計顯著性檢驗 (Paired t-test)')
+    parser.add_argument('--auto-cleanup', action='store_true',
+                        help='實驗結束後自動刪除多餘的中間 checkpoint（保留每個實驗 F1 最高的）')
 
     args = parser.parse_args()
 
@@ -815,6 +821,7 @@ def main():
         for dataset, status in results.items():
             print(f"  {get_display_name(dataset):12s}: {mode_str} {status}")
         print(f"{'='*80}\n")
+        _maybe_cleanup(args.auto_cleanup)
         return
 
     # 全 HKGAN 模式
@@ -843,6 +850,7 @@ def main():
         for dataset, status in results.items():
             print(f"  {get_display_name(dataset):12s}: {mode_str} {status}")
         print(f"{'='*80}\n")
+        _maybe_cleanup(args.auto_cleanup)
         return
 
     # 檢查 dataset 參數
@@ -852,16 +860,28 @@ def main():
     # HKGAN 模式
     if args.hkgan:
         run_hkgan_experiments(args.dataset, multi_seed=args.multi_seed)
+        _maybe_cleanup(args.auto_cleanup)
         return
 
     # Baseline 模式
     if args.baseline:
         run_baseline_only(args.dataset, multi_seed=args.multi_seed)
+        _maybe_cleanup(args.auto_cleanup)
         return
 
     # 預設: HKGAN 模式
     print("提示: 未指定模式，預設使用 HKGAN 模式。使用 --baseline 執行基線實驗。")
     run_hkgan_experiments(args.dataset, multi_seed=args.multi_seed)
+    _maybe_cleanup(args.auto_cleanup)
+
+
+def _maybe_cleanup(auto_cleanup: bool) -> None:
+    """實驗完成後觸發 checkpoint 清理。"""
+    if not auto_cleanup:
+        return
+    print("\n[自動清理] 實驗結束，開始清理多餘 checkpoint...")
+    summary = run_cleanup(execute=True)
+    print_cleanup_summary(summary)
 
 
 if __name__ == "__main__":

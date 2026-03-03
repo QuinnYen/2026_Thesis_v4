@@ -21,6 +21,7 @@ __pycache__/
 /results/baseline
 /results/improved
 /results/ablation
+/results/validation
 *.pt
 *.pth
 *.bin

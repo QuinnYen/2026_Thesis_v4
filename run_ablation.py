@@ -28,6 +28,9 @@ Tier 2 - 組件組合消融（預期差異 2-8%）：
 
     # 列出所有可用的消融變體
     python run_ablation.py --list
+
+    # 消融研究結束後自動清理多餘 checkpoint（加 --auto-cleanup）
+    python run_ablation.py --full-study --multi-seed --auto-cleanup
 """
 
 import subprocess
@@ -37,6 +40,7 @@ import sys
 import json
 import numpy as np
 from datetime import datetime
+from utils.checkpoint_cleaner import run_cleanup, print_cleanup_summary
 
 # =============================================================================
 # 消融變體配置
@@ -653,6 +657,8 @@ def main():
                         help='只生成消融報告（不執行實驗）')
     parser.add_argument('--list', action='store_true',
                         help='列出所有可用的消融變體')
+    parser.add_argument('--auto-cleanup', action='store_true',
+                        help='實驗結束後自動刪除多餘的中間 checkpoint（保留每個實驗 F1 最高的）')
 
     args = parser.parse_args()
 
@@ -669,6 +675,7 @@ def main():
     # 完整消融研究
     if args.full_study:
         run_full_study(multi_seed=args.multi_seed)
+        _maybe_cleanup(args.auto_cleanup)
         return
 
     # 執行所有消融變體（或指定的變體子集）
@@ -677,10 +684,20 @@ def main():
             parser.error("--all 需要指定 --dataset")
         variants = args.variants if args.variants else None  # None = 使用預設 ABLATION_ORDER
         run_all_ablations(args.dataset, multi_seed=args.multi_seed, variants=variants)
+        _maybe_cleanup(args.auto_cleanup)
         return
 
     # 沒有指定任何動作
     parser.print_help()
+
+
+def _maybe_cleanup(auto_cleanup: bool) -> None:
+    """實驗完成後觸發 checkpoint 清理。"""
+    if not auto_cleanup:
+        return
+    print("\n[自動清理] 實驗結束，開始清理多餘 checkpoint...")
+    summary = run_cleanup(execute=True)
+    print_cleanup_summary(summary)
 
 
 if __name__ == "__main__":
