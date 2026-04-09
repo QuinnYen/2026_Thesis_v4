@@ -75,27 +75,12 @@ training:
   contrastive_weight: 0.1
   contrastive_temperature: 0.07
 
-  # 保留 Logit 調整
+  # Logit 調整由驗證集 Grid Search 自動決定，初始值均為 0.0
   neutral_boost:
-    laptops: 0.8
-    lap16: 0.8
-    restaurants: 0.6
-    rest16: 1.0
-    mams: 0.0
     default: 0.0
 
   neg_suppress:
-    laptops: 0.6
-    lap16: 0.6
-    restaurants: 0.0
-    rest16: 0.2
-    mams: 0.0
     default: 0.0
 
   pos_suppress:
-    laptops: 0.0
-    lap16: 0.0
-    restaurants: 0.8
-    rest16: 0.5
-    mams: 0.0
     default: 0.0

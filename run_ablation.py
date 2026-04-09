@@ -190,6 +190,7 @@ def run_multi_seed_ablation(ablation_type, dataset):
                     'accuracy': result.get('accuracy', 0),
                     'f1_macro': result.get('f1_macro', 0),
                     'f1_per_class': result.get('f1_per_class', [0, 0, 0]),
+                    'logit_adj': result.get('_logit_adj', {}),
                 })
                 print(f"  [OK] seed={seed}: Acc={result.get('accuracy', 0)*100:.2f}%, F1={result.get('f1_macro', 0)*100:.2f}%")
             else:
@@ -243,7 +244,10 @@ def get_latest_experiment_result(results_dir, ablation_type):
         try:
             with open(result_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                return data.get('test_metrics', {})
+                metrics = data.get('test_metrics', {})
+                # 附帶回傳 grid search 結果（頂層欄位）
+                metrics['_logit_adj'] = data.get('logit_adj_grid_search', {})
+                return metrics
         except Exception:
             pass
 
@@ -305,6 +309,29 @@ def generate_multi_seed_ablation_report(ablation_type, dataset, results):
     report.append(f"  Pos F1:     {pos_mean:.2f}% +/- {pos_std:.2f}%")
     report.append("-" * 80)
     report.append("")
+
+    # Logit Adjustment Grid Search 結果
+    adj_records = [r.get('logit_adj', {}) for r in results if r.get('logit_adj')]
+    if adj_records:
+        report.append("-" * 80)
+        report.append("Logit Adjustment (Val-Set Grid Search)")
+        report.append("-" * 80)
+        report.append(f"{'Seed':<10} {'neutral_boost':<16} {'neg_suppress':<14} {'pos_suppress':<14} {'val F1':<10}")
+        report.append("-" * 80)
+        for r in results:
+            adj = r.get('logit_adj', {})
+            if adj:
+                report.append(f"{r['seed']:<10} {adj.get('neutral_boost', 0):<16.1f} {adj.get('neg_suppress', 0):<14.1f} {adj.get('pos_suppress', 0):<14.1f} {adj.get('val_f1', 0):<10.4f}")
+        report.append("-" * 80)
+        from collections import Counter
+        nb_counts = Counter(adj.get('neutral_boost', 0) for adj in adj_records)
+        ns_counts = Counter(adj.get('neg_suppress',  0) for adj in adj_records)
+        ps_counts = Counter(adj.get('pos_suppress',  0) for adj in adj_records)
+        report.append(f"  neutral_boost 分佈: { {f'{k:.1f}': v for k, v in sorted(nb_counts.items())} }")
+        report.append(f"  neg_suppress  分佈: { {f'{k:.1f}': v for k, v in sorted(ns_counts.items())} }")
+        report.append(f"  pos_suppress  分佈: { {f'{k:.1f}': v for k, v in sorted(ps_counts.items())} }")
+        report.append("")
+
     report.append("=" * 80)
 
     # 保存報告

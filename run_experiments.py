@@ -19,6 +19,16 @@
 
     # 實驗結束後自動清理多餘 checkpoint（加 --auto-cleanup）
     python run_experiments.py --hkgan --full-run --multi-seed --auto-cleanup
+
+    # 獨立清理模式（dry-run：列出將備份的 txt 和將刪除的資料夾）
+    python run_experiments.py --cleanup-only
+
+    # 獨立清理模式（實際執行：備份 txt → 刪除整個實驗子資料夾）
+    python run_experiments.py --cleanup-only --execute
+
+    # 論文全流程（Baseline + HKGAN + 消融，5 資料集，多種子，自動清理）
+    python run_experiments.py --full-thesis --multi-seed --auto-cleanup
+
 """
 
 import subprocess
@@ -26,6 +36,8 @@ import argparse
 from pathlib import Path
 import sys
 import json
+import shutil
+import datetime
 import numpy as np
 from scipy import stats
 from utils.checkpoint_cleaner import run_cleanup, print_cleanup_summary
@@ -536,8 +548,9 @@ def run_multi_seed_hkgan(dataset, config_path):
                     'accuracy': result.get('accuracy', 0),
                     'f1_macro': result.get('f1_macro', 0),
                     'f1_per_class': result.get('f1_per_class', [0, 0, 0]),
-                    'auc_macro': result.get('auc_macro'),  # 新增 AUC
-                    'auc_weighted': result.get('auc_weighted')
+                    'auc_macro': result.get('auc_macro'),
+                    'auc_weighted': result.get('auc_weighted'),
+                    'logit_adj': result.get('_logit_adj', {}),
                 })
                 auc_str = f", AUC={result.get('auc_macro', 0)*100:.2f}%" if result.get('auc_macro') else ""
                 print(f"  ✓ seed={seed}: Acc={result.get('accuracy', 0)*100:.2f}%, F1={result.get('f1_macro', 0)*100:.2f}%{auc_str}")
@@ -574,7 +587,10 @@ def get_latest_experiment_result(results_dir):
         try:
             with open(result_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                return data.get('test_metrics', {})
+                metrics = data.get('test_metrics', {})
+                # 附帶回傳 grid search 結果（頂層欄位）
+                metrics['_logit_adj'] = data.get('logit_adj_grid_search', {})
+                return metrics
         except Exception:
             pass
 
@@ -742,6 +758,30 @@ def generate_multi_seed_report(dataset, results):
     if f1_mean > 0:
         report.append(f"  Coefficient of Variation: {f1_std/f1_mean*100:.2f}%")
     report.append("")
+
+    # Logit Adjustment Grid Search 結果
+    adj_records = [r.get('logit_adj', {}) for r in results if r.get('logit_adj')]
+    if adj_records:
+        report.append("-" * 80)
+        report.append("Logit Adjustment (Val-Set Grid Search)")
+        report.append("-" * 80)
+        report.append(f"{'Seed':<10} {'neutral_boost':<16} {'neg_suppress':<14} {'pos_suppress':<14} {'val F1':<10}")
+        report.append("-" * 80)
+        for r in results:
+            adj = r.get('logit_adj', {})
+            if adj:
+                report.append(f"{r['seed']:<10} {adj.get('neutral_boost', 0):<16.1f} {adj.get('neg_suppress', 0):<14.1f} {adj.get('pos_suppress', 0):<14.1f} {adj.get('val_f1', 0):<10.4f}")
+        report.append("-" * 80)
+        # 統計最常被選中的值
+        from collections import Counter
+        nb_counts = Counter(adj.get('neutral_boost', 0) for adj in adj_records)
+        ns_counts = Counter(adj.get('neg_suppress',  0) for adj in adj_records)
+        ps_counts = Counter(adj.get('pos_suppress',  0) for adj in adj_records)
+        report.append(f"  neutral_boost 分佈: { {f'{k:.1f}': v for k, v in sorted(nb_counts.items())} }")
+        report.append(f"  neg_suppress  分佈: { {f'{k:.1f}': v for k, v in sorted(ns_counts.items())} }")
+        report.append(f"  pos_suppress  分佈: { {f'{k:.1f}': v for k, v in sorted(ps_counts.items())} }")
+        report.append("")
+
     report.append("=" * 80)
 
     # 保存報告
@@ -775,8 +815,19 @@ def main():
                         help='執行統計顯著性檢驗 (Paired t-test)')
     parser.add_argument('--auto-cleanup', action='store_true',
                         help='實驗結束後自動刪除多餘的中間 checkpoint（保留每個實驗 F1 最高的）')
+    parser.add_argument('--cleanup-only', action='store_true',
+                        help='獨立清理模式：備份所有 txt 後刪除整個實驗子資料夾（預設 dry-run，加 --execute 才實際執行）')
+    parser.add_argument('--execute', action='store_true',
+                        help='搭配 --cleanup-only 使用，實際執行備份+刪除（預設僅列出）')
+    parser.add_argument('--full-thesis', action='store_true',
+                        help='論文全流程：依序執行 Baseline → HKGAN → 消融（5 資料集，可搭配 --multi-seed --auto-cleanup）')
 
     args = parser.parse_args()
+
+    # 獨立清理模式
+    if args.cleanup_only:
+        _backup_and_cleanup(execute=args.execute)
+        return
 
     # 統計顯著性檢驗模式
     if args.significance_test:
@@ -793,6 +844,11 @@ def main():
                 generate_hkgan_report(dataset)
         # 生成論文圖表（包含 ROC 曲線）
         generate_thesis_figures()
+        return
+
+    # 論文全流程
+    if args.full_thesis:
+        _run_full_thesis(multi_seed=args.multi_seed, auto_cleanup=args.auto_cleanup)
         return
 
     # 全基線模式
@@ -873,6 +929,202 @@ def main():
     print("提示: 未指定模式，預設使用 HKGAN 模式。使用 --baseline 執行基線實驗。")
     run_hkgan_experiments(args.dataset, multi_seed=args.multi_seed)
     _maybe_cleanup(args.auto_cleanup)
+
+
+def _run_full_thesis(multi_seed: bool = False, auto_cleanup: bool = False) -> None:
+    """
+    論文全流程：依序執行
+      1. Baseline  × 5 資料集（多種子）
+      2. HKGAN     × 5 資料集（多種子）
+      3. 消融實驗   × 5 資料集 × 5 變體（多種子）
+      4. 自動清理多餘 checkpoint（可選）
+    """
+    seed_tag = "Multi-Seed" if multi_seed else "Single-Seed"
+    print(f"\n{'#'*80}")
+    print(f"# 論文全流程 ({seed_tag})")
+    print(f"# 資料集: {', '.join(ALL_DATASETS)}")
+    if multi_seed:
+        print(f"# Seeds : {MULTI_SEED_LIST}")
+    print(f"{'#'*80}\n")
+
+    stage_results = {}
+
+    # ── Stage 1: Baseline ──────────────────────────────────────────────────────
+    print(f"\n{'='*80}")
+    print(f"[Stage 1/3] Baseline × {len(ALL_DATASETS)} 資料集")
+    print(f"{'='*80}")
+    stage_results['baseline'] = {}
+    for dataset in ALL_DATASETS:
+        print(f"\n{'#'*60}")
+        print(f"# [Baseline] {get_display_name(dataset)}")
+        print(f"{'#'*60}")
+        ok = run_baseline_only(dataset, multi_seed=multi_seed)
+        stage_results['baseline'][dataset] = 'OK' if ok else 'FAIL'
+
+    # ── Stage 2: HKGAN 主實驗 ──────────────────────────────────────────────────
+    print(f"\n{'='*80}")
+    print(f"[Stage 2/3] HKGAN × {len(ALL_DATASETS)} 資料集")
+    print(f"{'='*80}")
+    stage_results['hkgan'] = {}
+    for dataset in ALL_DATASETS:
+        print(f"\n{'#'*60}")
+        print(f"# [HKGAN] {get_display_name(dataset)}")
+        print(f"{'#'*60}")
+        ok = run_hkgan_experiments(dataset, multi_seed=multi_seed)
+        stage_results['hkgan'][dataset] = 'OK' if ok else 'FAIL'
+
+    # ── Stage 3: 消融實驗（呼叫 run_ablation.py --full-study）─────────────────
+    print(f"\n{'='*80}")
+    print(f"[Stage 3/3] 消融實驗 × {len(ALL_DATASETS)} 資料集 × 5 變體")
+    print(f"{'='*80}")
+    ablation_cmd = [sys.executable, "run_ablation.py", "--full-study"]
+    if multi_seed:
+        ablation_cmd.append("--multi-seed")
+    try:
+        subprocess.run(ablation_cmd, check=True)
+        stage_results['ablation'] = 'OK'
+    except subprocess.CalledProcessError as e:
+        print(f"\n[!] 消融實驗失敗 (code: {e.returncode})")
+        stage_results['ablation'] = 'FAIL'
+    except KeyboardInterrupt:
+        print(f"\n[!] 消融實驗被中斷")
+        stage_results['ablation'] = 'INTERRUPTED'
+
+    # ── 全流程總結 ──────────────────────────────────────────────────────────────
+    print(f"\n{'='*80}")
+    print(f"  論文全流程完成摘要")
+    print(f"{'='*80}")
+    for stage, res in stage_results.items():
+        if isinstance(res, dict):
+            ok_count = sum(1 for v in res.values() if v == 'OK')
+            print(f"  {stage:<12}: {ok_count}/{len(res)} 成功")
+            for ds, status in res.items():
+                mark = '✓' if status == 'OK' else '✗'
+                print(f"    {mark} {get_display_name(ds)}")
+        else:
+            mark = '✓' if res == 'OK' else '✗'
+            print(f"  {stage:<12}: {mark} {res}")
+    print(f"{'='*80}\n")
+
+    if auto_cleanup:
+        _maybe_cleanup(True)
+
+
+def _backup_and_cleanup(execute: bool) -> None:
+    """
+    備份所有 txt 報告後，刪除整個實驗子資料夾（checkpoints、visualizations、reports 等）。
+
+    流程：
+      1. 備份 results/*.txt（頂層彙總報告）
+      2. 備份 results/{ablation,baseline,improved}/{dataset}/{exp}/ 下的所有 .txt
+      3. 備份目標：backup/<日期時間>/，保留相對路徑結構
+      4. 刪除整個實驗子資料夾
+    """
+    project_root = Path(__file__).parent
+    results_root = project_root / "results"
+
+    # 備份放在 backup/<日期時間>/
+    date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = project_root / "backup" / date_str
+
+    # 收集頂層 results/*.txt
+    top_txt = sorted(results_root.glob("*.txt"))
+
+    # 掃描所有實驗子資料夾（三層：category/dataset/exp_dir）
+    exp_dirs = []
+    for category in ["ablation", "baseline", "improved"]:
+        cat_dir = results_root / category
+        if not cat_dir.exists():
+            continue
+        for dataset_dir in sorted(cat_dir.iterdir()):
+            if not dataset_dir.is_dir():
+                continue
+            for exp_dir in sorted(dataset_dir.iterdir()):
+                if exp_dir.is_dir():
+                    exp_dirs.append(exp_dir)
+
+    # 收集實驗子資料夾內所有 txt
+    exp_txt = []
+    for exp_dir in exp_dirs:
+        exp_txt.extend(sorted(exp_dir.rglob("*.txt")))
+
+    all_txt = top_txt + exp_txt
+
+    # 計算實驗資料夾總大小
+    total_bytes = sum(
+        f.stat().st_size
+        for exp_dir in exp_dirs
+        for f in exp_dir.rglob("*")
+        if f.is_file()
+    )
+
+    def fmt_size(b):
+        for unit in ("B", "KB", "MB", "GB"):
+            if b < 1024:
+                return f"{b:.1f} {unit}"
+            b /= 1024
+        return f"{b:.1f} TB"
+
+    print(f"\n{'='*70}")
+    print(f"  結果備份與清理{'（執行模式）' if execute else '（Dry-Run 模式）'}")
+    print(f"{'='*70}")
+    print(f"\n  掃描到實驗資料夾：{len(exp_dirs)} 個")
+    print(f"  將備份 txt 檔：   {len(all_txt)} 個（頂層 {len(top_txt)} + 子資料夾 {len(exp_txt)}）")
+    print(f"  資料夾總大小：    {fmt_size(total_bytes)}")
+    print(f"  備份目標：        {backup_path}")
+    print(f"\n  備份清單（txt）：")
+    for txt in all_txt:
+        rel = txt.relative_to(project_root)
+        print(f"    {rel}")
+
+    print(f"\n  刪除清單（results/ 全部內容）：")
+    for item in sorted(results_root.iterdir()):
+        if item.is_dir():
+            size = sum(f.stat().st_size for f in item.rglob("*") if f.is_file())
+            print(f"    {item.name}/  [{fmt_size(size)}]")
+        else:
+            print(f"    {item.name}  [{fmt_size(item.stat().st_size)}]")
+
+    if not execute:
+        print(f"\n  [!] Dry-Run，尚未執行任何操作。")
+        print(f"      確認後加上 --execute 實際執行。")
+        print(f"{'='*70}\n")
+        return
+
+    # 執行備份
+    print(f"\n  正在備份 txt...")
+    backup_ok = 0
+    backup_fail = 0
+    for txt in all_txt:
+        rel = txt.relative_to(project_root)
+        dest = backup_path / rel
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(txt, dest)
+            backup_ok += 1
+        except Exception as e:
+            print(f"    [錯誤] 備份失敗 {rel}: {e}")
+            backup_fail += 1
+
+    print(f"  備份完成：{backup_ok} 個成功，{backup_fail} 個失敗")
+
+    # 執行刪除：清空整個 results/ 資料夾（保留資料夾本身）
+    print(f"\n  正在清空 results/...")
+    del_ok = 0
+    del_fail = 0
+    for item in results_root.iterdir():
+        try:
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+            del_ok += 1
+        except Exception as e:
+            print(f"    [錯誤] 刪除失敗 {item.name}: {e}")
+            del_fail += 1
+
+    print(f"  清空完成：{del_ok} 個項目刪除成功，{del_fail} 個失敗")
+    print(f"{'='*70}\n")
 
 
 def _maybe_cleanup(auto_cleanup: bool) -> None:

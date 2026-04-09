@@ -21,81 +21,70 @@ HKGAN (v3.0) 是一個用於面向切面情感分析 (ABSA) 的新穎架構，�
 ================================================================================
 
 Input: [CLS] text [SEP] aspect [SEP]
-              |
-              v
-+-----------------------------------------------------------------------------------+
-|                              BERT Encoder (12 layers)                             |
-|  +-----------------------------------------------------------------------+        |
-|  |  Layer 1-4 (Low)    |  Layer 5-8 (Mid)    |  Layer 9-12 (High)        |        |
-|  |  Lexical/Syntactic  |  Semantic           |  Task-specific            |        |
-|  +-----------------------------------------------------------------------+        |
-+-----------------------------------------------------------------------------------+
-              |                        |                        |
-              v                        v                        v
-+----------------------+      +----------------------+      +----------------------+
-|   Low Fusion         |      |   Mid Fusion         |      |   High Fusion        |
-| Linear(768*4 -> 768) |      | Linear(768*4 -> 768) |      | Linear(768*4 -> 768) |
-|   + LayerNorm        |      |   + LayerNorm        |      |   + LayerNorm        |
-|   + GELU             |      |   + GELU             |      |   + GELU             |
-+----------------------+      +----------------------+      +----------------------+
-              |                        |                        |
-              +------------------------+------------------------+
-                                       |
-                                       v
-                    +------------------------------------------+
-                    |          SenticNet Knowledge             |
-                    |    token_id -> polarity_value [-1, 1]    |
-                    +------------------------------------------+
-                                       |
-                                       v
-                    +------------------------------------------+
-                    |       Confidence Gate (v2.1)             |
-                    |  gate = σ((Wh + bias) / temperature)     |
-                    |  gated_polarity = gate * raw_polarity    |
-                    +------------------------------------------+
-                                       |
-                                       v
-                    +------------------------------------------+
-                    |     Dynamic Knowledge Gate (v3.0)        |
-                    |  Gate = σ(Linear([BERT, SenticNet]))     |
-                    |  Feature = (1-Gate)*BERT + Gate*Senti    |
-                    +------------------------------------------+
-                                       |
-              +------------------------+------------------------+
-              |                        |                        |
-              v                        v                        v
-+-------------------+      +-------------------+      +-------------------+
-|  Hierarchical GAT |      |  Hierarchical GAT |      |  Hierarchical GAT |
-|  (Low Features)   |      |  (Mid Features)   |      |  (High Features)  |
-+-------------------+      +-------------------+      +-------------------+
-              |                        |                        |
-              v                        v                        v
-+-----------------------------------------------------------------------------------+
-|                        Hierarchical GAT Layer (Detail)                            |
-|  +-------------------------------------------------------------------------+      |
-|  |                                                                         |      |
-|  |   Level 1: Token-level     Level 2: Phrase-level    Level 3: Clause     |      |
-|  |   (window=3)               (window=5)               (fully connected)   |      |
-|  |        |                        |                        |              |      |
-|  |        v                        v                        v              |      |
-|  |   +-----------+            +-----------+            +-----------+       |      |
-|  |   | Knowledge |            | Knowledge |            | Knowledge |       |      |
-|  |   | Enhanced  |            | Enhanced  |            | Enhanced  |       |      |
-|  |   |   GAT     |            |   GAT     |            |   GAT     |       |      |
-|  |   +-----------+            +-----------+            +-----------+       |      |
-|  |        |                        |                        |              |      |
-|  |        +------------------------+------------------------+              |      |
-|  |                                 |                                       |      |
-|  |                                 v                                       |      |
-|  |                    +-----------------------+                            |      |
-|  |                    |    Level Fusion       |                            |      |
-|  |                    | Weighted Sum + Concat |                            |      |
-|  |                    +-----------------------+                            |      |
-|  +-------------------------------------------------------------------------+      |
-+-----------------------------------------------------------------------------------+
+         |                         
+         v                           (token_ids, parallel lookup)
++----------------------------+      +----------------------------------+
+|  BERT Encoder (12 layers)  |      |    SenticNet Knowledge Lookup    |
+|                            |      |  token_id -> polarity [-1, 1]    |
+|  Layer 1-4  (Low)          |      |  (vectorized table, built once)  |
+|  Layer 5-8  (Mid)          |      +----------------------------------+
+|  Layer 9-12 (High)         |                  | polarities
++----------------------------+                  |
+     |         |         |                      |
+     v         v         v                      |
++------+  +------+  +------+                    |
+|Low   |  |Mid   |  |High  |                    |
+|Fusion|  |Fusion|  |Fusion|                    |
+|768*4 |  |768*4 |  |768*4 |                    |
+|->768 |  |->768 |  |->768 |                    |
++------+  +------+  +------+                    |
+   |         |         |                        |
+   +---------+---------+------------------------+
+                       |  (low_feat / mid_feat / high_feat + polarities, called separately)
+                       v
++-------------------------------------------------------------------------------+
+|    Hierarchical GAT Layer  [Shared Weights, Called 3x for Low/Mid/High]       |
+|  +-------------------------------------------------------------------------+  |
+|  |                                                                         |  |
+|  |   Level 1: Token(w=3)   Level 2: Phrase(w=5)   Level 3: Clause(full)    |  |
+|  |        |                        |                        |              |  |
+|  |        v                        v                        v              |  |
+|  |   +-----------+            +-----------+            +-----------+       |  |
+|  |   | Dynamic   |            | Dynamic   |            | Dynamic   |       |  |
+|  |   | Knowledge |            | Knowledge |            | Knowledge |       |  |
+|  |   | Gate (v3) |            | Gate (v3) |            | Gate (v3) |       |  |
+|  |   | (1) mods  |            | (1) mods  |            | (1) mods  |       |  |
+|  |   |  node feat|            |  node feat|            |  node feat|       |  |
+|  |   +-----------+            +-----------+            +-----------+       |  |
+|  |        |                        |                        |              |  |
+|  |        v                        v                        v              |  |
+|  |   +-----------+            +-----------+            +-----------+       |  |
+|  |   | Confidence|            | Confidence|            | Confidence|       |  |
+|  |   | Gate (v2) |            | Gate (v2) |            | Gate (v2) |       |  |
+|  |   | (2) mods  |            | (2) mods  |            | (2) mods  |       |  |
+|  |   |  edge wts |            |  edge wts |            |  edge wts |       |  |
+|  |   +-----------+            +-----------+            +-----------+       |  |
+|  |        |                        |                        |              |  |
+|  |        v                        v                        v              |  |
+|  |   +-----------+            +-----------+            +-----------+       |  |
+|  |   | Knowledge |            | Knowledge |            | Knowledge |       |  |
+|  |   | Enhanced  |            | Enhanced  |            | Enhanced  |       |  |
+|  |   |   GAT     |            |   GAT     |            |   GAT     |       |  |
+|  |   +-----------+            +-----------+            +-----------+       |  |
+|  |        |                        |                        |              |  |
+|  |        +------------------------+------------------------+              |  |
+|  |                                 |                                       |  |
+|  |                                 v                                       |  |
+|  |                    +-----------------------+                            |  |
+|  |                    |    Level Fusion       |                            |  |
+|  |                    | Weighted Sum + Linear |                            |  |
+|  |                    +-----------------------+                            |  |
+|  +-------------------------------------------------------------------------+  |
++-------------------------------------------------------------------------------+
               |                        |                        |
               v                        v                        v
          [CLS] Pool              [CLS] Pool              [CLS] Pool
+         (Low out)               (Mid out)               (High out)
               |                        |                        |
               +------------------------+------------------------+
                                        |
@@ -103,7 +92,8 @@ Input: [CLS] text [SEP] aspect [SEP]
                     +------------------------------------------+
                     |         Cross-Level Fusion               |
                     |   w0*Low + w1*Mid + w2*High (weighted)   |
-                    |   + Concat([Low, Mid, High]) -> Linear   |
+                    |   + Linear(Concat([Low, Mid, High]))     |
+                    |   Final = weighted_sum + projected_concat|
                     +------------------------------------------+
                                        |
                                        v
@@ -113,32 +103,32 @@ Input: [CLS] text [SEP] aspect [SEP]
                     +------------------------------------------+
                                        |
                                        v
-+-----------------------------------------------------------------------------------+
-|                  Inter-Aspect Attention + Sentiment-Aware Isolation (v2.3+)       |
-|  +-------------------------------------------------------------------------+      |
-|  |                                                                         |      |
-|  |   1. Multi-Head Self-Attention across aspects                           |      |
-|  |      Aspect_1 <-----> Aspect_2 <-----> Aspect_3                         |      |
-|  |                                                                         |      |
-|  |   2. Sentiment Prediction (lightweight predictor)                       |      |
-|  |      self_sentiment = softmax(predictor(aspect_features))               |      |
-|  |      context_sentiment = softmax(predictor(context_features))           |      |
-|  |                                                                         |      |
-|  |   3. Sentiment Consistency (consistency calculation)                    |      |
-|  |      consistency = sum(self_sentiment * context_sentiment)              |      |
-|  |                                                                         |      |
-|  |   4. Sentiment-Aware Isolation (dynamic isolation)                      |      |
-|  |      base_isolation = isolation_gate(aspect_features)                   |      |
-|  |      adjusted = base * (1 - strength * consistency)                     |      |
-|  |      effective = adjusted * (1 - base) + base                           |      |
-|  |                                                                         |      |
-|  |   5. Gated Fusion                                                       |      |
-|  |      self_weight = effective + (1-effective) * relation_gate            |      |
-|  |      context_weight = (1-effective) * (1-relation_gate)                 |      |
-|  |      output = self_weight * self + context_weight * context             |      |
-|  |                                                                         |      |
-|  +-------------------------------------------------------------------------+      |
-+-----------------------------------------------------------------------------------+
++-------------------------------------------------------------------------------+
+|           Inter-Aspect Attention + Sentiment-Aware Isolation (v2.3+)          |
+|  +-------------------------------------------------------------------------+  |
+|  |                                                                         |  |
+|  |   1. Multi-Head Self-Attention across aspects                           |  |
+|  |      Aspect_1 <-----> Aspect_2 <-----> Aspect_3                         |  |
+|  |                                                                         |  |
+|  |   2. Sentiment Prediction (lightweight predictor)                       |  |
+|  |      self_sentiment = softmax(predictor(aspect_features))               |  |
+|  |      context_sentiment = softmax(predictor(context_features))           |  |
+|  |                                                                         |  |
+|  |   3. Sentiment Consistency (consistency calculation)                    |  |
+|  |      consistency = sum(self_sentiment * context_sentiment)              |  |
+|  |                                                                         |  |
+|  |   4. Sentiment-Aware Isolation (dynamic isolation)                      |  |
+|  |      base_isolation = isolation_gate(aspect_features)                   |  |
+|  |      adjusted = base * (1 - strength * consistency)                     |  |
+|  |      effective = adjusted * (1 - base) + base                           |  |
+|  |                                                                         |  |
+|  |   5. Gated Fusion                                                       |  |
+|  |      self_weight = effective + (1-effective) * relation_gate            |  |
+|  |      context_weight = (1-effective) * (1-relation_gate)                 |  |
+|  |      output = self_weight * self + context_weight * context             |  |
+|  |                                                                         |  |
+|  +-------------------------------------------------------------------------+  |
++-------------------------------------------------------------------------------+
                                        |
                                        v
                     +----------------------------------------------+
@@ -336,13 +326,15 @@ preds = torch.argmax(adjusted_logits, dim=-1)
 |------|--------|------|
 | BERT | ~110M | 預訓練語言模型 |
 | 融合層 | 3 × (768×4 → 768) | ~7M |
-| GAT 層 | 3 層級 × 4 頭 | ~2M |
-| Confidence Gate | 768 → 192 → 1 | ~0.15M |
-| Dynamic Knowledge Gate | (768+1) → 1 | ~0.8K |
+| Hierarchical GAT（共享實例，3 子層）| ~12M | 含以下三項 × 3 |
+| Dynamic Knowledge Gate × 3 | polarity_embed + gate_network + output_proj | ~1.3M × 3 = ~4M |
+| Confidence Gate × 3 | 768 → 192 → 1 | ~148K × 3 = ~444K |
+| Knowledge-Enhanced GAT × 3 | 4 頭 GAT | ~2M × 3 = ~6M |
+| Cross-Level Fusion | 768×3 → 768 | ~1.8M |
+| Inter-Aspect Attention + Gates | 4 頭注意力 + 關係門控 | ~4M |
 | Sentiment Predictor | 768 → 192 → 3 | ~0.15M |
-| IARN + Isolation | 4 頭注意力 + 門控 | ~1.5M |
 | 分類器 | 768 → 768 → 3 | ~0.6M |
-| **總計** | **~121M** | |
+| **總計** | **~136M** | |
 
 ## 訓練配置
 
@@ -525,10 +517,11 @@ DAPT 讓 BERT 學習領域特定的語言模式，例如：
 3. 階層式特徵提取
    → Low/Mid/High 特徵 [batch, seq_len, 768] × 3
 
-4. SenticNet 查詢 + Confidence Gate
-   → 門控後的極性值 [batch, seq_len]
+4. SenticNet 查詢（與步驟 2-3 並行）
+   → polarities [batch, seq_len]（向量化查找表）
 
-5. 階層式 GAT 處理
+5. 階層式 GAT 處理（共享權重，以 Low/Mid/High 特徵分別呼叫 3 次）
+   每次呼叫內部：Dynamic Knowledge Gate (1) → Confidence Gate (2) → Knowledge-Enhanced GAT
    → 知識增強的圖特徵 [batch, seq_len, 768] × 3
 
 6. 跨層融合

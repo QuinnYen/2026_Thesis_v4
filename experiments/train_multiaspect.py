@@ -579,7 +579,7 @@ def analyze_gate_statistics(all_gates):
     return stats
 
 
-def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, collect_gates=False, return_confusion_matrix=False, return_predictions=False):
+def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, collect_gates=False, return_confusion_matrix=False, return_predictions=False, return_raw_logits=False):
     """
     評估 multi-aspect 模型
 
@@ -601,6 +601,9 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     layer_attention_weights = None  # 收集 HBL 的 layer attention 權重
     all_branch_weights = []  # 收集 AH-IARN 的分支權重
     hsa_level_weights = None  # 收集 HSA 層級權重
+    raw_logits_list = []   # 收集 raw logits（用於 grid search）
+    raw_labels_list = []   # 收集對應 labels（用於 grid search）
+    raw_mask_list   = []   # 收集 aspect_mask（用於 grid search）
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating", ascii=True, leave=False):
@@ -631,6 +634,12 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
                 elif collect_gates:
                     # PMAC 模型：收集 gate 值
                     all_gates.extend(extras.cpu().numpy().flatten().tolist())
+
+            # 收集 raw logits（用於事後 grid search，不佔 GPU 記憶體）
+            if return_raw_logits:
+                raw_logits_list.append(logits.cpu())
+                raw_labels_list.append(labels.cpu())
+                raw_mask_list.append(aspect_mask.cpu())
 
             # 計算 loss（與訓練時使用相同的 loss 函數）
             if loss_fn is not None and args is not None:
@@ -820,6 +829,12 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
             'num_classes': 3,
             'class_names': ['Negative', 'Neutral', 'Positive']
         }
+
+    # 回傳 raw logits（供 grid search 使用）
+    if return_raw_logits and raw_logits_list:
+        result['raw_logits'] = torch.cat(raw_logits_list, dim=0)   # [N, max_aspects, 3]
+        result['raw_labels'] = torch.cat(raw_labels_list, dim=0)   # [N, max_aspects]
+        result['raw_mask']   = torch.cat(raw_mask_list,   dim=0)   # [N, max_aspects]
 
     return result
 
@@ -1442,6 +1457,61 @@ def train_multiaspect_model(args):
     best_model_path = checkpoints_dir / f'best_model_epoch{best_epoch}_f1_{best_val_f1:.4f}.pt'
     model.load_state_dict(torch.load(best_model_path))
 
+    # ── 驗證集 Grid Search：自動搜尋最佳非對稱 Logit 調整值 ──────────────────
+    # 用驗證集 raw logits 窮舉 96 組組合，找讓 val macro-F1 最高的參數
+    # 方法合法：僅使用 val 集，不觸碰測試集
+    _neutral_grid = [0.0, 0.3, 0.5, 0.8, 1.0, 1.2]
+    _neg_grid     = [0.0, 0.2, 0.4, 0.6]
+    _pos_grid     = [0.0, 0.3, 0.5, 0.8]
+
+    print("\n  [Grid Search] 在驗證集上搜尋最佳 Logit 調整值...")
+    _val_raw = evaluate_multi_aspect(
+        model, val_loader, device, loss_fn=None, args=None,
+        return_raw_logits=True
+    )
+    _raw_logits = _val_raw['raw_logits']   # [N, max_aspects, 3]
+    _raw_labels = _val_raw['raw_labels']   # [N, max_aspects]
+    _raw_mask   = _val_raw['raw_mask']     # [N, max_aspects] bool
+
+    # 展平有效 aspect（過濾 mask=False 或 label=-100）
+    _valid_mask = _raw_mask & (_raw_labels != -100)  # [N, max_aspects]
+    _flat_logits = _raw_logits[_valid_mask]  # [M, 3]
+    _flat_labels = _raw_labels[_valid_mask]  # [M]
+
+    best_gs_f1  = -1.0
+    best_neutral = getattr(args, 'neutral_boost', 0.0)
+    best_neg     = getattr(args, 'neg_suppress',  0.0)
+    best_pos     = getattr(args, 'pos_suppress',  0.0)
+
+    for _nb in _neutral_grid:
+        for _ns in _neg_grid:
+            for _ps in _pos_grid:
+                _adj = _flat_logits.clone()
+                if _nb != 0.0:
+                    _adj[:, 1] = _adj[:, 1] + _nb
+                if _ns != 0.0:
+                    _adj[:, 0] = _adj[:, 0] - _ns
+                if _ps != 0.0:
+                    _adj[:, 2] = _adj[:, 2] - _ps
+                _preds = torch.argmax(_adj, dim=-1).numpy()
+                _labels_np = _flat_labels.numpy()
+                _f1 = f1_score(_labels_np, _preds, average='macro', zero_division=0)
+                if _f1 > best_gs_f1:
+                    best_gs_f1  = _f1
+                    best_neutral = _nb
+                    best_neg     = _ns
+                    best_pos     = _ps
+
+    print(f"  [Grid Search] 最佳組合: neutral_boost={best_neutral:.1f} "
+          f"neg_suppress={best_neg:.1f} pos_suppress={best_pos:.1f} "
+          f"→ val F1={best_gs_f1:.4f}")
+
+    # 將搜尋結果覆寫到 args，後續測試集評估會自動套用
+    args.neutral_boost = best_neutral
+    args.neg_suppress  = best_neg
+    args.pos_suppress  = best_pos
+    # ─────────────────────────────────────────────────────────────────────
+
     # 測試集評估（也計算 loss）
     loss_fn_for_eval = loss_fn if args.loss_type != 'ce' else None
     test_metrics = evaluate_multi_aspect(
@@ -1471,6 +1541,12 @@ def train_multiaspect_model(args):
     results = {
         'args': vars(args),
         'best_val_f1': float(best_val_f1),
+        'logit_adj_grid_search': {
+            'neutral_boost': best_neutral,
+            'neg_suppress':  best_neg,
+            'pos_suppress':  best_pos,
+            'val_f1':        round(best_gs_f1, 4),
+        },
         'history': history,
         'test_metrics': {k: float(v) if isinstance(v, (float, np.float32, np.float64)) else v
                         for k, v in test_metrics.items() if k != 'predictions'}

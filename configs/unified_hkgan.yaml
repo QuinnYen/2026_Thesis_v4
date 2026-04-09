@@ -129,28 +129,13 @@ training:
   #   - Restaurants: Neutral 比例低 (~18%)，從零開始調整
   #   - MAMS: Neutral 比例高 (~33%)，需要調整
   #
+  # 以下三個參數由驗證集 Grid Search 自動決定（train_multiaspect.py），
+  # 此處統一設為 0.0 作為初始值（grid search 覆蓋這些值）
   neutral_boost:
-    laptops: 0.8
-    lap16: 0.8
-    restaurants: 0.6      # 餐廳領域：提升 Neutral 識別
-    rest16: 1.0           # REST16 猛藥：Neu F1 只有 35%，需要非常激進的提升
-    mams: 0.0             # MAMS 歸零測試：看模型原始輸出
     default: 0.0
 
   neg_suppress:
-    laptops: 0.6
-    lap16: 0.6            # LAP16：與 laptops 一致，0.8 效果反降
-    restaurants: 0.0      # 餐廳領域不需要抑制 Negative
-    rest16: 0.2           # REST16：Neg F1 81.23% 偏高，輕微抑制防止 Neu→Neg
-    mams: 0.0             # MAMS 不需要抑制 Negative
     default: 0.0
 
-  # pos_suppress: 抑制 Positive logits (解決 Neu→Pos)
-  # 餐廳領域因 Yelp 正向偏誤，需要抑制過度樂觀的 Positive 預測
   pos_suppress:
-    laptops: 0.0          # 筆電領域不需要抑制 Positive
-    lap16: 0.0
-    restaurants: 0.8      # 餐廳領域：Positive Recall 96.7% 過高，需抑制
-    rest16: 0.5           # REST16：Pos F1 92.83% 過高，中度抑制救回 Neutral
-    mams: 0.0
     default: 0.0
