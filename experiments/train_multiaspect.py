@@ -601,9 +601,8 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     layer_attention_weights = None  # 收集 HBL 的 layer attention 權重
     all_branch_weights = []  # 收集 AH-IARN 的分支權重
     hsa_level_weights = None  # 收集 HSA 層級權重
-    raw_logits_list = []   # 收集 raw logits（用於 grid search）
-    raw_labels_list = []   # 收集對應 labels（用於 grid search）
-    raw_mask_list   = []   # 收集 aspect_mask（用於 grid search）
+    raw_logits_list = []   # 收集 raw logits（用於 grid search，已展平為有效 aspect）
+    raw_labels_list = []   # 收集對應 labels（用於 grid search，已展平）
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating", ascii=True, leave=False):
@@ -635,11 +634,15 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
                     # PMAC 模型：收集 gate 值
                     all_gates.extend(extras.cpu().numpy().flatten().tolist())
 
-            # 收集 raw logits（用於事後 grid search，不佔 GPU 記憶體）
+            # 收集 raw logits（用於事後 grid search，展平為有效 aspect）
             if return_raw_logits:
-                raw_logits_list.append(logits.cpu())
-                raw_labels_list.append(labels.cpu())
-                raw_mask_list.append(aspect_mask.cpu())
+                _logits_cpu = logits.cpu()    # [B, A, 3]
+                _labels_cpu = labels.cpu()    # [B, A]
+                _mask_cpu   = aspect_mask.cpu()  # [B, A]
+                _valid = _mask_cpu & (_labels_cpu != -100)
+                if _valid.any():
+                    raw_logits_list.append(_logits_cpu[_valid])   # [valid, 3]
+                    raw_labels_list.append(_labels_cpu[_valid])   # [valid]
 
             # 計算 loss（與訓練時使用相同的 loss 函數）
             if loss_fn is not None and args is not None:
@@ -830,11 +833,10 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
             'class_names': ['Negative', 'Neutral', 'Positive']
         }
 
-    # 回傳 raw logits（供 grid search 使用）
+    # 回傳 raw logits（供 grid search 使用，已展平為有效 aspect）
     if return_raw_logits and raw_logits_list:
-        result['raw_logits'] = torch.cat(raw_logits_list, dim=0)   # [N, max_aspects, 3]
-        result['raw_labels'] = torch.cat(raw_labels_list, dim=0)   # [N, max_aspects]
-        result['raw_mask']   = torch.cat(raw_mask_list,   dim=0)   # [N, max_aspects]
+        result['raw_logits'] = torch.cat(raw_logits_list, dim=0)   # [total_valid, 3]
+        result['raw_labels'] = torch.cat(raw_labels_list, dim=0)   # [total_valid]
 
     return result
 
@@ -1469,14 +1471,8 @@ def train_multiaspect_model(args):
         model, val_loader, device, loss_fn=None, args=None,
         return_raw_logits=True
     )
-    _raw_logits = _val_raw['raw_logits']   # [N, max_aspects, 3]
-    _raw_labels = _val_raw['raw_labels']   # [N, max_aspects]
-    _raw_mask   = _val_raw['raw_mask']     # [N, max_aspects] bool
-
-    # 展平有效 aspect（過濾 mask=False 或 label=-100）
-    _valid_mask = _raw_mask & (_raw_labels != -100)  # [N, max_aspects]
-    _flat_logits = _raw_logits[_valid_mask]  # [M, 3]
-    _flat_labels = _raw_labels[_valid_mask]  # [M]
+    _flat_logits = _val_raw['raw_logits']   # [total_valid, 3]（已在收集時展平）
+    _flat_labels = _val_raw['raw_labels']   # [total_valid]
 
     best_gs_f1  = -1.0
     best_neutral = getattr(args, 'neutral_boost', 0.0)
