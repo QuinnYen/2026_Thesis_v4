@@ -605,7 +605,7 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     raw_labels_list = []   # 收集對應 labels（用於 grid search，已展平）
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating", ascii=True, leave=False):
+        for batch in tqdm(dataloader, desc="Evaluating", ascii=True, leave=False, ncols=80, file=sys.stderr):
             # 使用新的 sentence-pair 格式
             pair_ids = batch['pair_input_ids'].to(device)
             pair_mask = batch['pair_attention_mask'].to(device)
@@ -1250,7 +1250,7 @@ def train_multiaspect_model(args):
         train_loss = 0
         train_steps = 0
 
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}", ascii=True)
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}", ascii=True, ncols=80, file=sys.stderr)
         for batch_idx, batch in enumerate(progress_bar):
             # 使用新的 sentence-pair 格式
             pair_ids = batch['pair_input_ids'].to(device)
@@ -1457,7 +1457,7 @@ def train_multiaspect_model(args):
 
     # 加載最佳模型
     best_model_path = checkpoints_dir / f'best_model_epoch{best_epoch}_f1_{best_val_f1:.4f}.pt'
-    model.load_state_dict(torch.load(best_model_path))
+    model.load_state_dict(torch.load(best_model_path, map_location=device))
 
     # ── 驗證集 Grid Search：自動搜尋最佳非對稱 Logit 調整值 ──────────────────
     # 用驗證集 raw logits 窮舉 96 組組合，找讓 val macro-F1 最高的參數

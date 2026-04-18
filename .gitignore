@@ -17,12 +17,12 @@ __pycache__/
 *$py.class
 *.so
 
-# Results
-/results/baseline
-/results/improved
-/results/ablation
-/results/validation
+# Results（完整忽略）
+/results/
 /backup/
 *.pt
 *.pth
 *.bin
+
+# Docs（實驗筆記、計畫文件）
+/docs/

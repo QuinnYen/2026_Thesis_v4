@@ -44,7 +44,7 @@ def find_experiments(results_dir, dataset):
             if not exp_dir.is_dir():
                 continue
             dir_name = exp_dir.name
-            if '_baseline_bert_cls_' in dir_name or '_baseline_bert_only_' in dir_name:
+            if '_baseline_bert_cls' in dir_name or '_baseline_bert_only' in dir_name:
                 experiments['baseline'] = exp_dir
                 break
 
@@ -55,7 +55,7 @@ def find_experiments(results_dir, dataset):
             if not exp_dir.is_dir():
                 continue
             dir_name = exp_dir.name
-            if '_improved_hkgan_' in dir_name:
+            if '_hkgan' in dir_name:
                 experiments['hkgan'] = exp_dir
                 break
 
