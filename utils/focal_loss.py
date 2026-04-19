@@ -238,13 +238,11 @@ def compute_dynamic_class_weights(train_samples, num_classes=3, smooth=True):
         w = total / (num_classes * count)
         weights.append(w)
 
-    # 平滑處理：限制權重範圍在 [0.5, 3.0]
+    # 截斷最大權重，防止極端類別分布（如 REST16 Positive 73%）造成梯度失衡
+    # 保留原始 inverse frequency 比例，不做 normalize（normalize 會抵消截斷效果）
+    # max_weight=3.0：以驗證集 F1 選定，允許少數類別最多獲得多數類別 6 倍的梯度貢獻
     if smooth:
         weights = [max(0.5, min(3.0, w)) for w in weights]
-
-    # 正規化：確保平均權重為 1.0
-    avg_weight = sum(weights) / len(weights)
-    weights = [w / avg_weight for w in weights]
 
     return weights
 

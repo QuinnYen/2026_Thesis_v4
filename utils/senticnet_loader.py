@@ -150,6 +150,9 @@ class SenticNetKnowledge:
         # 加載 SenticNet
         self._load_senticnet(senticnet_path)
 
+        # 計算有命中詞的平均極性（用於未知詞 fallback，優於零向量）
+        self._neutral_mean_polarity: float = self._compute_mean_polarity()
+
         # 設置領域過濾
         if domain:
             self.set_domain(domain)
@@ -220,6 +223,49 @@ class SenticNetKnowledge:
 
         if error_count > 0:
             print(f"[SenticNet] Skipped {error_count} malformed entries")
+
+    # =========================================================================
+    # 知識庫統計與輔助查詢
+    # =========================================================================
+
+    def _compute_mean_polarity(self) -> float:
+        """
+        計算所有已知詞的平均極性，用於未知詞 fallback
+
+        未知詞改用均值（而非零）可避免「假中性」噪音：
+        SenticNet 中多數詞略帶正向偏置，均值約 0.1~0.2
+        """
+        if not self.senticnet:
+            return 0.0
+        values = [entry[7] for entry in self.senticnet.values()
+                  if isinstance(entry[7], (int, float))]
+        return sum(values) / len(values) if values else 0.0
+
+    def _wordnet_lookup(self, clean_word: str) -> Optional[float]:
+        """
+        透過 WordNet 同義詞進行二次查找
+
+        Args:
+            clean_word: 已清理的詞（小寫、無標點）
+
+        Returns:
+            極性值（float）如果找到同義詞；否則返回 None
+        """
+        try:
+            from nltk.corpus import wordnet
+            for syn in wordnet.synsets(clean_word):
+                for lemma in syn.lemmas():
+                    # 嘗試帶空格的形式
+                    candidate = lemma.name().lower().replace('_', ' ')
+                    if candidate in self.senticnet:
+                        return self.senticnet[candidate][7]
+                    # 嘗試原始下劃線形式
+                    candidate_us = lemma.name().lower()
+                    if candidate_us in self.senticnet:
+                        return self.senticnet[candidate_us][7]
+        except Exception:
+            pass
+        return None
 
     # =========================================================================
     # 領域特定過濾（Domain-specific Filtering）
@@ -334,9 +380,9 @@ class SenticNetKnowledge:
             self.polarity_cache[word] = polarity
             return polarity
 
-        # 未找到，返回中性
-        self.polarity_cache[word] = 0.0
-        return 0.0
+        # 未找到：返回均值（而非零），避免「假中性」噪音注入
+        self.polarity_cache[word] = self._neutral_mean_polarity
+        return self._neutral_mean_polarity
 
     def get_polarity_with_coverage(self, word: str) -> tuple:
         """
@@ -370,8 +416,8 @@ class SenticNetKnowledge:
         if underscored in self.senticnet:
             return self.senticnet[underscored][7], True
 
-        # 未找到
-        return 0.0, False
+        # 未找到：均值 + 標記為未知（模型透過 coverage_mask 屏蔽 gate）
+        return self._neutral_mean_polarity, False
 
     def get_coverage_mask(self, words: List[str]) -> torch.Tensor:
         """
@@ -569,6 +615,10 @@ if __name__ == "__main__":
     # 測試
     senticnet = SenticNetKnowledge()
 
+    print(f"\n=== 知識庫統計 ===")
+    print(f"  已知詞數量：{len(senticnet)}")
+    print(f"  均值極性（neutral_mean_polarity）：{senticnet._neutral_mean_polarity:+.4f}")
+
     test_words = ['good', 'bad', 'excellent', 'terrible', 'neutral', 'food', 'delicious']
 
     print("\n=== SenticNet Polarity Test ===")
@@ -577,6 +627,12 @@ if __name__ == "__main__":
         label = senticnet.get_polarity_label(word)
         emotion = senticnet.get_primary_emotion(word)
         print(f"  {word:15s} → polarity={polarity:+.3f}, label={label:10s}, emotion={emotion}")
+
+    print("\n=== Fallback 驗證（Laptop 技術詞，均值而非零）===")
+    laptop_words = ['processor', 'trackpad', 'keyboard', 'ssd']
+    for word in laptop_words:
+        pol, is_known = senticnet.get_polarity_with_coverage(word)
+        print(f"  {word:12s} → final_pol={pol:+.3f}, is_known={is_known}")
 
     print("\n=== Related Concepts ===")
     for word in ['good', 'bad']:

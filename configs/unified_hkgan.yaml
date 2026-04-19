@@ -86,11 +86,17 @@ data:
 training:
   batch_size: 16          # GAT 較耗內存，使用較小 batch
   accumulation_steps: 2   # 等效 batch_size = 32
-  epochs: 30
-  lr: 3.0e-5  # 提高學習率，與 HAN 一致
+  epochs: 40              # 方案四：延長給慢速收斂資料集（REST16/MAMS）更多機會
+  lr:                     # 方案七：各資料集針對性學習率
+    rest14: 3.0e-5
+    laptops: 3.0e-5       # LAP14 v2：回標準 lr（2e-5 過保守導致退步）
+    mams: 3.0e-5
+    rest16: 3.0e-5
+    lap16: 2.0e-5
+    default: 3.0e-5
   weight_decay: 0.01
   grad_clip: 1.0
-  patience: 10
+  patience: 12            # 方案四：配合 epochs 40，給更長的等待窗口
   seed: 42
 
   use_scheduler: true
@@ -98,14 +104,32 @@ training:
 
   # 損失函數配置
   loss_type: "focal"
-  focal_gamma: 2.0        # 提高 gamma，更關注難樣本
-  class_weights: [0.8, 1.8, 0.8]   # 手動設定：大幅提高 Neutral 權重
+  focal_gamma:            # 方案七：各資料集針對性 gamma（順序：Neg/Neu/Pos 難樣本聚焦）
+    rest14: 2.5
+    laptops: 2.5          # LAP14 v2：適中 gamma（3.0 過強導致退步）
+    mams: 2.0
+    rest16: 2.0
+    lap16: 2.5
+    default: 2.0
+  class_weights:          # 方案七：手動設定（依 inverse freq 人工審核，auto 因不可預期放棄）
+    rest14: [1.2, 2.0, 0.6]   # Pos 61%：壓 Pos，提 Neu
+    laptops: [1.0, 1.8, 0.7]  # 接近舊值，穩定優先
+    mams: [1.0, 1.0, 1.0]     # 三類均衡，不需調整
+    rest16: [1.5, 3.0, 0.5]   # 已驗證有效（Pos 73% 極端偏斜）
+    lap16: [1.2, 2.0, 0.6]    # 類似 rest14
+    default: [1.0, 1.8, 0.8]  # fallback
 
   virtual_weight: 0.5
 
   # LLRD (可選)
   use_llrd: true
-  llrd_decay: 0.95
+  llrd_decay:             # 方案七：各資料集針對性 LLRD decay
+    rest14: 0.95
+    laptops: 0.95         # LAP14 v2：回標準（0.90 過保守）
+    mams: 0.95
+    rest16: 0.95
+    lap16: 0.90
+    default: 0.95
 
   # 監督式對比學習 (SCL) - 解決中性類別語義塌陷
   # 預期效果: Neutral F1 +3%~8%

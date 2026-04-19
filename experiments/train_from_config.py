@@ -208,7 +208,11 @@ def config_to_args(config, dataset=None):
             args.extend(['--epochs', str(train_cfg['epochs'])])
 
         if 'lr' in train_cfg:
-            args.extend(['--lr', str(train_cfg['lr'])])
+            lr = train_cfg['lr']
+            if isinstance(lr, dict):
+                lr = lr.get(dataset, lr.get('default', 3e-5)) if dataset else lr.get('default', 3e-5)
+                print(f"[Config] 根據資料集 '{dataset}' 選擇 lr: {lr}")
+            args.extend(['--lr', str(lr)])
 
         if 'weight_decay' in train_cfg:
             args.extend(['--weight_decay', str(train_cfg['weight_decay'])])
@@ -230,13 +234,20 @@ def config_to_args(config, dataset=None):
             args.extend(['--loss_type', train_cfg['loss_type']])
 
         if 'focal_gamma' in train_cfg:
-            args.extend(['--focal_gamma', str(train_cfg['focal_gamma'])])
+            fg = train_cfg['focal_gamma']
+            if isinstance(fg, dict):
+                fg = fg.get(dataset, fg.get('default', 2.0)) if dataset else fg.get('default', 2.0)
+                print(f"[Config] 根據資料集 '{dataset}' 選擇 focal_gamma: {fg}")
+            args.extend(['--focal_gamma', str(fg)])
 
         if 'label_smoothing' in train_cfg:
             args.extend(['--label_smoothing', str(train_cfg['label_smoothing'])])
 
         if 'class_weights' in train_cfg:
             cw = train_cfg['class_weights']
+            if isinstance(cw, dict):
+                cw = cw.get(dataset, cw.get('default', [0.8, 1.8, 0.8])) if dataset else cw.get('default', [0.8, 1.8, 0.8])
+                print(f"[Config] 根據資料集 '{dataset}' 選擇 class_weights: {cw}")
             if cw == 'auto':
                 # 動態計算 class weights
                 args.append('--auto_class_weights')
@@ -264,7 +275,11 @@ def config_to_args(config, dataset=None):
             args.append('--use_llrd')
 
         if 'llrd_decay' in train_cfg:
-            args.extend(['--llrd_decay', str(train_cfg['llrd_decay'])])
+            decay = train_cfg['llrd_decay']
+            if isinstance(decay, dict):
+                decay = decay.get(dataset, decay.get('default', 0.95)) if dataset else decay.get('default', 0.95)
+                print(f"[Config] 根據資料集 '{dataset}' 選擇 llrd_decay: {decay}")
+            args.extend(['--llrd_decay', str(decay)])
 
         # 非對稱 Logit 調整 (推理時)
         # 支援對應表格式：根據 dataset 選擇對應的值
