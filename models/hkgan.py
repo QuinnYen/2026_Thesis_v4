@@ -871,7 +871,8 @@ class HKGAN(nn.Module):
         use_dynamic_gate: bool = True,
         use_inter_aspect: bool = True,
         use_hierarchical_features: bool = True,
-        domain: str = None
+        domain: str = None,
+        polarity_threshold: float = 0.0
     ):
         super().__init__()
 
@@ -884,6 +885,7 @@ class HKGAN(nn.Module):
         self.use_inter_aspect = use_inter_aspect
         self.use_hierarchical_features = use_hierarchical_features
         self.domain = domain
+        self.polarity_threshold = polarity_threshold  # 方案18A：|polarity| < threshold 的詞走 identity pass
 
         # ========== 1. BERT Encoder ==========
         self.bert_absa = BERTForABSA(
@@ -1106,7 +1108,12 @@ class HKGAN(nn.Module):
             # 使用新的帶覆蓋信息的查詢方法
             polarity, is_known = self.senticnet.get_polarity_with_coverage(token)
             polarity_list.append(polarity)
-            coverage_list.append(1.0 if is_known else 0.0)
+            # 方案18A Selective Injection：|polarity| < threshold 的詞視為「未注入」
+            # threshold=0.0 時退化為原行為（只看 is_known）
+            if is_known and abs(polarity) >= self.polarity_threshold:
+                coverage_list.append(1.0)
+            else:
+                coverage_list.append(0.0)
 
         # 直接賦值給已註冊的 buffer（會自動移動到正確的設備）
         device = next(self.parameters()).device

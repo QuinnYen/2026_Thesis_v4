@@ -1118,7 +1118,8 @@ def train_multiaspect_model(args):
         max_text_len=args.max_text_len,
         max_aspect_len=args.max_aspect_len,
         max_num_aspects=args.max_aspects,
-        soft_labels_dict=soft_labels_dict
+        soft_labels_dict=soft_labels_dict,
+        use_stratified_sampler=getattr(args, 'use_stratified_sampler', False)
     )
 
     # 創建模型
@@ -1244,7 +1245,20 @@ def train_multiaspect_model(args):
         'epochs': []
     }
 
+    # 方案18B Knowledge Curriculum：記錄原始 knowledge_weight，用於線性 warmup
+    _base_knowledge_weight = getattr(args, 'knowledge_weight', 0.1)
+    _knowledge_warmup_epochs = getattr(args, 'knowledge_warmup_epochs', 0)
+
     for epoch in range(args.epochs):
+        # 方案18B：動態更新 knowledge_weight（前 N epoch 為 0，之後線性提升到原始值）
+        if _knowledge_warmup_epochs > 0 and hasattr(model, 'hierarchical_gat'):
+            if epoch < _knowledge_warmup_epochs:
+                cur_kw = 0.0
+            else:
+                progress = (epoch - _knowledge_warmup_epochs) / max(1, args.epochs - _knowledge_warmup_epochs)
+                cur_kw = _base_knowledge_weight * min(1.0, progress * 2)  # 前半段線性提升，後半段保持
+            model.hierarchical_gat.knowledge_weight = cur_kw
+
         # 訓練階段
         model.train()
         train_loss = 0
@@ -1646,6 +1660,8 @@ def main():
                         help='數據集選擇 (restaurants, laptops, mams, rest16, lap16, 或 memd_* 系列)')
     parser.add_argument('--use_augmented', action='store_true', default=False,
                         help='使用增強數據集 (Claude Augmentation)')
+    parser.add_argument('--use_stratified_sampler', action='store_true', default=False,
+                        help='方案二十：Stratified Batch Sampler，強制 batch 類別平衡（解決 REST16 Neutral 稀少問題）')
     parser.add_argument('--augmented_dir', type=str, default=None,
                         help='增強數據目錄（若不指定，自動根據 dataset 設置）')
     parser.add_argument('--use_self_training', action='store_true', default=False,
@@ -1719,6 +1735,10 @@ def main():
                         help='HKGAN: 禁用 SenticNet 知識增強（消融實驗用）')
 
     # HKGAN v2.0 新增：Neutral 識別改進
+    parser.add_argument('--polarity_threshold', type=float, default=0.0,
+                        help='HKGAN 方案18A: |polarity| < threshold 的詞走 identity pass（0=關閉）')
+    parser.add_argument('--knowledge_warmup_epochs', type=int, default=0,
+                        help='HKGAN 方案18B: 前 N epoch 關閉知識通道，之後線性提升（0=關閉）')
     parser.add_argument('--use_confidence_gate', action='store_true', default=True,
                         help='HKGAN: 是否使用信心門控（動態調整 SenticNet 注入強度）')
     parser.add_argument('--no_confidence_gate', action='store_true', default=False,

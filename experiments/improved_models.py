@@ -1317,7 +1317,9 @@ def create_improved_model(model_type, args, num_classes=3):
             # 消融實驗用
             use_inter_aspect=getattr(args, 'use_inter_aspect', True),
             use_hierarchical_features=getattr(args, 'use_hierarchical_features', True),
-            domain=getattr(args, 'domain', None)
+            domain=getattr(args, 'domain', None),
+            # 方案18A：Selective Knowledge Injection
+            polarity_threshold=getattr(args, 'polarity_threshold', 0.0)
         )
 
     else:

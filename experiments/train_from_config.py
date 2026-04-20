@@ -158,6 +158,14 @@ def config_to_args(config, dataset=None):
         if 'domain' in model_cfg and model_cfg['domain']:
             args.extend(['--domain', model_cfg['domain']])
 
+        # 方案18A：Selective Knowledge Injection（支援 per-dataset dict）
+        if 'polarity_threshold' in model_cfg:
+            pt = model_cfg['polarity_threshold']
+            if isinstance(pt, dict):
+                pt = pt.get(dataset, pt.get('default', 0.0)) if dataset else pt.get('default', 0.0)
+                print(f"[Config] 根據資料集 '{dataset}' 選擇 polarity_threshold: {pt}")
+            args.extend(['--polarity_threshold', str(pt)])
+
     # 數據配置
     if 'data' in config:
         data_cfg = config['data']
@@ -263,6 +271,10 @@ def config_to_args(config, dataset=None):
         if 'seed' in train_cfg:
             args.extend(['--seed', str(train_cfg['seed'])])
 
+        # 方案18B：Knowledge Curriculum
+        if 'knowledge_warmup_epochs' in train_cfg:
+            args.extend(['--knowledge_warmup_epochs', str(train_cfg['knowledge_warmup_epochs'])])
+
         # 對比學習參數
         if 'contrastive_weight' in train_cfg:
             args.extend(['--contrastive_weight', str(train_cfg['contrastive_weight'])])
@@ -312,6 +324,10 @@ def config_to_args(config, dataset=None):
                     pos_suppress = pos_suppress.get('default', 0.0)
                 print(f"[Config] 根據資料集 '{dataset}' 選擇 pos_suppress: {pos_suppress}")
             args.extend(['--pos_suppress', str(pos_suppress)])
+
+        # 方案二十：Stratified Batch Sampler
+        if train_cfg.get('use_stratified_sampler', False):
+            args.append('--use_stratified_sampler')
 
     # 知識蒸餾配置
     if 'distillation' in config:

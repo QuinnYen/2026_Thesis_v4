@@ -50,6 +50,9 @@ model:
   use_senticnet: true
   knowledge_weight: 0.1  # 知識注入權重 (0.05-0.2)
 
+  # 方案18A 已驗證失敗（LAP14 -1.58%，REST16 -0.86%），關閉
+  polarity_threshold: 0.0
+
   # ========== Neutral 識別改進（v2.0 新增）==========
   # 信心門控：讓模型根據上下文動態決定是否信任 SenticNet
   # 解決問題：技術語境下的通用情感詞會被誤判
@@ -121,6 +124,11 @@ training:
 
   virtual_weight: 0.5
 
+  # ========== 方案18B：Knowledge Curriculum ==========
+  # 前 N epoch 完全關閉知識通道，之後線性提升到 knowledge_weight
+  # 0 = 關閉；建議 5（讓 BERT 先站穩再引入知識）
+  knowledge_warmup_epochs: 0  # 方案18B 暫停：對 Neutral 9% 的 REST16 反效果，前 N epoch 無知識讓少數類更難收斂
+
   # LLRD (可選)
   use_llrd: true
   llrd_decay:             # 方案七：各資料集針對性 LLRD decay
@@ -133,8 +141,8 @@ training:
 
   # 監督式對比學習 (SCL) - 解決中性類別語義塌陷
   # 預期效果: Neutral F1 +3%~8%
-  contrastive_weight: 0.1     # 對比損失權重 (0.05-0.2, 0=禁用)
-  contrastive_temperature: 0.07  # 溫度參數 (越小分布越尖銳)
+  contrastive_weight: 0.0     # 方案17 SupCon 已驗證失敗，關閉（0=禁用）
+  contrastive_temperature: 0.07  # 溫度參數（保留供未來參考）
 
   # ========== 非對稱 Logit 調整 (Asymmetric Logit Adjustment) ==========
   # 推理時調整 logits，專門解決 Neutral 誤判問題
@@ -163,3 +171,8 @@ training:
 
   pos_suppress:
     default: 0.0
+
+  # ========== 方案二十：Stratified Batch Sampler ==========
+  # 強制 batch 內各類別均有訊號，解決 REST16 Neutral 9% batch 空缺問題
+  # 開啟後建議同步將 class_weights 從 [1.5, 3.0, 0.5] 適度調回（避免雙重補償）
+  use_stratified_sampler: true
