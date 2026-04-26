@@ -48,10 +48,13 @@ model:
 
   # SenticNet 知識增強
   use_senticnet: true
-  knowledge_weight: 0.1  # 知識注入權重 (0.05-0.2)
-
-  # 方案18A 已驗證失敗（LAP14 -1.58%，REST16 -0.86%），關閉
-  polarity_threshold: 0.0
+  knowledge_weight:       # 方案三十：per-dataset 知識注入強度
+    restaurants: 0.02     # 消融 +0.43%（知識是噪音），極輕觸
+    laptops: 0.02         # 消融 +1.02%（知識是噪音），極輕觸
+    mams: 0.02            # 消融 +0.23%，極輕觸
+    rest16: 0.1           # 消融 -1.63%（知識有效），維持原值
+    lap16: 0.05           # 消融 -0.43%（知識略有效），輕度降低
+    default: 0.1
 
   # ========== Neutral 識別改進（v2.0 新增）==========
   # 信心門控：讓模型根據上下文動態決定是否信任 SenticNet
@@ -67,14 +70,20 @@ model:
   # 行為：模型自動學習何時信任外部知識，何時只相信 BERT
   use_dynamic_gate: true
 
-  # 領域過濾：針對特定領域的技術術語遮蔽通用情感極性
-  # 可選值：null, "laptops", "restaurants", "mams"
-  # 設為 null 時會自動根據數據集名稱推斷
-  # 注意：在 run_experiments.py 中會根據 dataset 自動設置
-  domain: null  # 將由訓練腳本根據數據集自動設置
+  # 領域過濾：已停用（方案二十七，2026-04-24）
+  # 原設計：手工黑名單讓 'cheap'/'slow'/'crowded' 強制回傳 polarity=0
+  # 停用原因：上述詞在評論中實為負面，強制歸零干擾 Gate 學習；
+  #           Dynamic Gate（v3.0）已能自動決定何時信任 SenticNet，Filter 冗餘。
+  # domain: null → set_domain() 不呼叫 → 無任何術語被過濾
+  domain: null
 
   # IARN 參數 (用於跨面向建模)
   iarm_heads: 4
+
+# 知識庫 backend 選擇（方案二十三+）
+# nrc_vad  : NRC VAD Lexicon v2.1（2025）—單字覆蓋率高（LAP ~85%），推薦
+# senticnet : SenticNet（手上版本，LAP ~23% 覆蓋率）
+knowledge_backend: senticnet
 
 data:
   use_augmented: false  # 關閉 Claude 增強
@@ -91,7 +100,7 @@ training:
   accumulation_steps: 2   # 等效 batch_size = 32
   epochs: 40              # 方案四：延長給慢速收斂資料集（REST16/MAMS）更多機會
   lr:                     # 方案七：各資料集針對性學習率
-    rest14: 3.0e-5
+    restaurants: 3.0e-5
     laptops: 3.0e-5       # LAP14 v2：回標準 lr（2e-5 過保守導致退步）
     mams: 3.0e-5
     rest16: 3.0e-5
@@ -108,41 +117,31 @@ training:
   # 損失函數配置
   loss_type: "focal"
   focal_gamma:            # 方案七：各資料集針對性 gamma（順序：Neg/Neu/Pos 難樣本聚焦）
-    rest14: 2.5
+    restaurants: 2.5
     laptops: 2.5          # LAP14 v2：適中 gamma（3.0 過強導致退步）
     mams: 2.0
     rest16: 2.0
     lap16: 2.5
     default: 2.0
   class_weights:          # 方案七：手動設定（依 inverse freq 人工審核，auto 因不可預期放棄）
-    rest14: [1.2, 2.0, 0.6]   # Pos 61%：壓 Pos，提 Neu
-    laptops: [1.0, 1.8, 0.7]  # 接近舊值，穩定優先
-    mams: [1.0, 1.0, 1.0]     # 三類均衡，不需調整
-    rest16: [1.5, 3.0, 0.5]   # 已驗證有效（Pos 73% 極端偏斜）
-    lap16: [1.2, 2.0, 0.6]    # 類似 rest14
-    default: [1.0, 1.8, 0.8]  # fallback
+    restaurants: [1.2, 2.0, 0.6]  # Pos 61%：壓 Pos，提 Neu
+    laptops: [1.0, 1.8, 0.7]      # 接近舊值，穩定優先
+    mams: [1.0, 1.0, 1.0]         # 三類均衡，不需調整
+    rest16: [1.5, 3.0, 0.5]       # 已驗證有效（Pos 73% 極端偏斜）
+    lap16: [1.2, 2.0, 0.6]        # 類似 restaurants
+    default: [1.0, 1.8, 0.8]      # fallback
 
   virtual_weight: 0.5
-
-  # ========== 方案18B：Knowledge Curriculum ==========
-  # 前 N epoch 完全關閉知識通道，之後線性提升到 knowledge_weight
-  # 0 = 關閉；建議 5（讓 BERT 先站穩再引入知識）
-  knowledge_warmup_epochs: 0  # 方案18B 暫停：對 Neutral 9% 的 REST16 反效果，前 N epoch 無知識讓少數類更難收斂
 
   # LLRD (可選)
   use_llrd: true
   llrd_decay:             # 方案七：各資料集針對性 LLRD decay
-    rest14: 0.95
+    restaurants: 0.95
     laptops: 0.95         # LAP14 v2：回標準（0.90 過保守）
     mams: 0.95
     rest16: 0.95
     lap16: 0.90
     default: 0.95
-
-  # 監督式對比學習 (SCL) - 解決中性類別語義塌陷
-  # 預期效果: Neutral F1 +3%~8%
-  contrastive_weight: 0.0     # 方案17 SupCon 已驗證失敗，關閉（0=禁用）
-  contrastive_temperature: 0.07  # 溫度參數（保留供未來參考）
 
   # ========== 非對稱 Logit 調整 (Asymmetric Logit Adjustment) ==========
   # 推理時調整 logits，專門解決 Neutral 誤判問題
@@ -176,3 +175,10 @@ training:
   # 強制 batch 內各類別均有訊號，解決 REST16 Neutral 9% batch 空缺問題
   # 開啟後建議同步將 class_weights 從 [1.5, 3.0, 0.5] 適度調回（避免雙重補償）
   use_stratified_sampler: true
+
+  # ========== 方案二十九：Gate Penalty（端到端 Gate 監督）==========
+  # 對預測錯誤的 aspect 懲罰高 gate 值，讓 Gate 從錯誤中學習「何時不信任知識庫」
+  # 解決 NRC-VAD 技術詞語義衝突（battery=-1.08/ram=-1.38 在 LAP 語境下為錯誤極性）
+  # 0.0 = 關閉；建議起點 0.1，若 Gate 過度抑制可降至 0.05
+  gate_penalty_weight: 0.0
+

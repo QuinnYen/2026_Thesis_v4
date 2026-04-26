@@ -116,7 +116,11 @@ def config_to_args(config, dataset=None):
             args.extend(['--gat_layers', str(model_cfg['gat_layers'])])
 
         if 'knowledge_weight' in model_cfg:
-            args.extend(['--knowledge_weight', str(model_cfg['knowledge_weight'])])
+            kw = model_cfg['knowledge_weight']
+            if isinstance(kw, dict):
+                kw = kw.get(dataset, kw.get('default', 0.1)) if dataset else kw.get('default', 0.1)
+                print(f"[Config] 根據資料集 '{dataset}' 選擇 knowledge_weight: {kw}")
+            args.extend(['--knowledge_weight', str(kw)])
 
         if 'gate_reg_weight' in model_cfg:
             args.extend(['--gate_reg_weight', str(model_cfg['gate_reg_weight'])])
@@ -157,14 +161,6 @@ def config_to_args(config, dataset=None):
 
         if 'domain' in model_cfg and model_cfg['domain']:
             args.extend(['--domain', model_cfg['domain']])
-
-        # 方案18A：Selective Knowledge Injection（支援 per-dataset dict）
-        if 'polarity_threshold' in model_cfg:
-            pt = model_cfg['polarity_threshold']
-            if isinstance(pt, dict):
-                pt = pt.get(dataset, pt.get('default', 0.0)) if dataset else pt.get('default', 0.0)
-                print(f"[Config] 根據資料集 '{dataset}' 選擇 polarity_threshold: {pt}")
-            args.extend(['--polarity_threshold', str(pt)])
 
     # 數據配置
     if 'data' in config:
@@ -271,17 +267,6 @@ def config_to_args(config, dataset=None):
         if 'seed' in train_cfg:
             args.extend(['--seed', str(train_cfg['seed'])])
 
-        # 方案18B：Knowledge Curriculum
-        if 'knowledge_warmup_epochs' in train_cfg:
-            args.extend(['--knowledge_warmup_epochs', str(train_cfg['knowledge_warmup_epochs'])])
-
-        # 對比學習參數
-        if 'contrastive_weight' in train_cfg:
-            args.extend(['--contrastive_weight', str(train_cfg['contrastive_weight'])])
-
-        if 'contrastive_temperature' in train_cfg:
-            args.extend(['--contrastive_temperature', str(train_cfg['contrastive_temperature'])])
-
         # Layer-wise Learning Rate Decay (LLRD)
         if train_cfg.get('use_llrd'):
             args.append('--use_llrd')
@@ -328,6 +313,10 @@ def config_to_args(config, dataset=None):
         # 方案二十：Stratified Batch Sampler
         if train_cfg.get('use_stratified_sampler', False):
             args.append('--use_stratified_sampler')
+
+        # 方案二十九：Gate Penalty
+        if 'gate_penalty_weight' in train_cfg:
+            args.extend(['--gate_penalty_weight', str(train_cfg['gate_penalty_weight'])])
 
     # 知識蒸餾配置
     if 'distillation' in config:
@@ -381,6 +370,13 @@ def main():
         return
 
     config = load_config(config_path)
+
+    # 依 yaml 的 knowledge_backend 切換知識庫（預設 nrc_vad）
+    backend = config.get('knowledge_backend', 'nrc_vad')
+    from datasets.loader_knowledge import set_knowledge_backend, reset_senticnet
+    reset_senticnet()
+    set_knowledge_backend(backend)
+    print(f"[Config] knowledge_backend = {backend}")
 
     # 轉換為命令行參數（傳入 dataset 以選擇對應的 bert_model）
     train_args = config_to_args(config, dataset=args.dataset)

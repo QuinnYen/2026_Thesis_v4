@@ -29,14 +29,13 @@ import seaborn as sns
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data.semeval_multiaspect import load_multiaspect_data
-from data.semeval2016_multiaspect import load_semeval2016_data
-from data.mams_multiaspect import load_mams_data
-from data.memd_multiaspect import load_memd_data
-from data.multiaspect_dataset import create_multiaspect_dataloaders
+from datasets.loader_semeval14 import load_multiaspect_data
+from datasets.loader_semeval16 import load_semeval2016_data
+from datasets.loader_mams import load_mams_data
+from datasets.multiaspect_dataset import create_multiaspect_dataloaders
 from models.bert_embedding import BERTForABSA
 from models.base_model import BaseModel
-from utils.focal_loss import get_loss_function, get_combined_loss_function, MultiAspectContrastiveLoss, get_distillation_loss_function
+from utils.focal_loss import get_loss_function, get_distillation_loss_function
 from utils.dataset_analyzer import analyze_dataset, print_dataset_stats
 from utils.model_selector import select_model, get_model_config, print_selection_result
 
@@ -914,16 +913,11 @@ def train_multiaspect_model(args):
     if args.no_hierarchical_features:
         args.use_hierarchical_features = False
 
-    # 自動推斷 domain（如果未指定）
-    if args.domain is None and args.improved == 'hkgan':
-        # 根據數據集名稱自動設置領域
-        if args.dataset in ['laptops', 'lap16']:
-            args.domain = 'laptops'
-            print(f"  [HKGAN] Auto-detected domain: laptops")
-        elif args.dataset in ['restaurants', 'rest16', 'mams']:
-            args.domain = 'restaurants'
-            print(f"  [HKGAN] Auto-detected domain: restaurants")
-        # 其他數據集不設置 domain（不啟用領域過濾）
+    # Domain Filter 已停用（方案二十七，2026-04-24）
+    # 原本會自動推斷 domain 並啟用手工技術術語過濾表，
+    # 但 'cheap'/'slow'/'crowded' 等詞在評論中實為負面，強制歸零反而干擾 Gate 學習。
+    # Dynamic Gate（v3.0）已能自動學習何時信任 SenticNet，Filter 屬冗餘。
+    # args.domain 維持 None，SenticNetKnowledge.set_domain() 不會被呼叫。
 
     # 加載數據
 
@@ -952,10 +946,6 @@ def train_multiaspect_model(args):
         val_xml = 'val.xml'
         test_xml = 'test.xml'
         default_aug_dir = None  # MAMS 暫不支持數據增強
-    elif args.dataset.startswith('memd_'):
-        # MEMD-ABSA 數據集 (Books, Clothing, Hotel, Laptop, Restaurant)
-        memd_domain = args.dataset.replace('memd_', '').capitalize()
-        default_aug_dir = None  # MEMD 暫不支持數據增強
     else:
         raise ValueError(f"不支援的數據集: {args.dataset}")
 
@@ -971,20 +961,6 @@ def train_multiaspect_model(args):
             train_path=str(train_path),
             val_path=str(val_path),
             test_path=str(test_path),
-            min_aspects=args.min_aspects,
-            max_aspects=args.max_aspects,
-            include_single_aspect=args.include_single_aspect,
-            virtual_aspect_mode=args.virtual_aspect_mode
-        )
-    elif args.dataset.startswith('memd_'):
-        # MEMD-ABSA 數據集
-
-        # MEMD 數據路徑
-        memd_dir = project_root / 'data' / 'raw' / 'MEMD-ABSA'
-
-        train_samples, val_samples, test_samples = load_memd_data(
-            domain=memd_domain,
-            data_dir=str(memd_dir),
             min_aspects=args.min_aspects,
             max_aspects=args.max_aspects,
             include_single_aspect=args.include_single_aspect,
@@ -1124,8 +1100,6 @@ def train_multiaspect_model(args):
 
     # 創建模型
     print("\n" + "-"*60)
-    # 檢查是否啟用對比學習
-    use_contrastive = getattr(args, 'contrastive_weight', 0.0) > 0
 
     if args.baseline:
         print(f"Creating Model: Baseline-{args.baseline}")
@@ -1162,8 +1136,6 @@ def train_multiaspect_model(args):
             model.set_mode(multi_aspect_ratio)
 
     print(f"  BERT: {args.bert_model} | Dropout: {args.dropout}")
-    if use_contrastive:
-        print(f"  Contrastive Learning: weight={args.contrastive_weight}, temp={args.contrastive_temperature}")
     if args.neutral_boost != 0.0:
         print(f"  Neutral Boost: +{args.neutral_boost} (logit offset for Neutral class)")
 
@@ -1245,19 +1217,7 @@ def train_multiaspect_model(args):
         'epochs': []
     }
 
-    # 方案18B Knowledge Curriculum：記錄原始 knowledge_weight，用於線性 warmup
-    _base_knowledge_weight = getattr(args, 'knowledge_weight', 0.1)
-    _knowledge_warmup_epochs = getattr(args, 'knowledge_warmup_epochs', 0)
-
     for epoch in range(args.epochs):
-        # 方案18B：動態更新 knowledge_weight（前 N epoch 為 0，之後線性提升到原始值）
-        if _knowledge_warmup_epochs > 0 and hasattr(model, 'hierarchical_gat'):
-            if epoch < _knowledge_warmup_epochs:
-                cur_kw = 0.0
-            else:
-                progress = (epoch - _knowledge_warmup_epochs) / max(1, args.epochs - _knowledge_warmup_epochs)
-                cur_kw = _base_knowledge_weight * min(1.0, progress * 2)  # 前半段線性提升，後半段保持
-            model.hierarchical_gat.knowledge_weight = cur_kw
 
         # 訓練階段
         model.train()
@@ -1310,13 +1270,6 @@ def train_multiaspect_model(args):
 
                     loss = distill_loss_fn(logits, labels, soft_labels, aspect_mask, is_virtual)
 
-                    # 添加對比損失（如果啟用且模型提供特徵）
-                    if use_contrastive and extras is not None and 'features' in extras:
-                        contrastive_loss = contrastive_loss_fn(
-                            extras['features'], labels, aspect_mask
-                        )
-                        loss = loss + contrastive_loss
-
                 elif args.loss_type != 'ce':
                     # 使用 Focal Loss 或 Adaptive Loss
                     if 'loss_fn' not in locals():
@@ -1334,21 +1287,7 @@ def train_multiaspect_model(args):
                             train_samples=train_samples  # 傳入訓練樣本以計算動態權重
                         ).to(device)
 
-                        # 創建對比損失函數（如果啟用）
-                        if use_contrastive and 'contrastive_loss_fn' not in locals():
-                            contrastive_loss_fn = MultiAspectContrastiveLoss(
-                                temperature=args.contrastive_temperature,
-                                contrastive_weight=args.contrastive_weight
-                            ).to(device)
-
                     loss = loss_fn(logits, labels, aspect_mask, is_virtual)
-
-                    # 添加對比損失（如果啟用且模型提供特徵）
-                    if use_contrastive and extras is not None and 'features' in extras:
-                        contrastive_loss = contrastive_loss_fn(
-                            extras['features'], labels, aspect_mask
-                        )
-                        loss = loss + contrastive_loss
                 else:
                     # 使用標準 CE Loss
                     loss = compute_multi_aspect_loss(
@@ -1356,26 +1295,25 @@ def train_multiaspect_model(args):
                         virtual_weight=args.virtual_weight
                     )
 
-                    # 對 CE Loss 也支持對比學習
-                    if use_contrastive:
-                        if 'contrastive_loss_fn' not in locals():
-                            contrastive_loss_fn = MultiAspectContrastiveLoss(
-                                temperature=args.contrastive_temperature,
-                                contrastive_weight=args.contrastive_weight
-                            ).to(device)
-
-                        if extras is not None and 'features' in extras:
-                            contrastive_loss = contrastive_loss_fn(
-                                extras['features'], labels, aspect_mask
-                            )
-                            loss = loss + contrastive_loss
-
-                # Gate 開啟正則化：懲罰 gate_values 趨近 0，強迫知識訊號進入模型
-                if (getattr(args, 'gate_reg_weight', 0.0) > 0.0
+                # Gate Penalty：對預測錯誤的 aspect 懲罰高 gate 值
+                # 邏輯：若知識注入（高 gate）反而導致預測錯誤，Gate 應學會降低信任
+                gate_penalty_weight = getattr(args, 'gate_penalty_weight', 0.0)
+                if (gate_penalty_weight > 0.0
                         and extras is not None
                         and 'gate_values_grad' in extras):
-                    gate_reg = -extras['gate_values_grad'].mean()
-                    loss = loss + args.gate_reg_weight * gate_reg
+                    # gate_flat: [batch*max_aspects]，每個 aspect 的平均知識門控強度
+                    gate_flat = extras['gate_values_grad']  # 保留梯度
+                    # reshape 成 [batch, max_aspects] 與 labels/logits 對齊（從 labels shape 取維度）
+                    b, m = labels.shape
+                    gate_per_aspect = gate_flat.view(b, m)
+                    # wrong_mask: 預測錯誤且為有效 aspect 的位置
+                    with torch.no_grad():
+                        preds = logits.argmax(dim=-1)  # [batch, max_aspects]
+                        wrong_mask = (preds != labels) & aspect_mask & (labels != -100)
+                    # 只對預測錯誤的位置施加懲罰（gate 越高懲罰越重）
+                    n_wrong = wrong_mask.float().sum().clamp(min=1)
+                    gate_penalty = (gate_per_aspect * wrong_mask.float()).sum() / n_wrong
+                    loss = loss + gate_penalty_weight * gate_penalty
 
                 # 梯度累積：將 loss 除以累積步數
                 loss = loss / args.accumulation_steps
@@ -1653,11 +1591,8 @@ def main():
 
     # 數據參數
     parser.add_argument('--dataset', type=str, required=True,
-                        choices=['restaurants', 'laptops', 'mams',
-                                 'rest16', 'lap16',
-                                 'memd_books', 'memd_clothing', 'memd_hotel',
-                                 'memd_laptop', 'memd_restaurant'],
-                        help='數據集選擇 (restaurants, laptops, mams, rest16, lap16, 或 memd_* 系列)')
+                        choices=['restaurants', 'laptops', 'mams', 'rest16', 'lap16'],
+                        help='數據集選擇 (restaurants, laptops, mams, rest16, lap16)')
     parser.add_argument('--use_augmented', action='store_true', default=False,
                         help='使用增強數據集 (Claude Augmentation)')
     parser.add_argument('--use_stratified_sampler', action='store_true', default=False,
@@ -1729,16 +1664,14 @@ def main():
                         help='HKGAN: SenticNet 知識注入權重')
     parser.add_argument('--gate_reg_weight', type=float, default=0.0,
                         help='HKGAN: Gate 開啟正則化強度（0=關閉，建議從 0.02 開始）')
+    parser.add_argument('--gate_penalty_weight', type=float, default=0.0,
+                        help='HKGAN: Gate Penalty 強度（方案二十九）：對預測錯誤 aspect 的高 gate 值進行懲罰，0=關閉')
     parser.add_argument('--use_senticnet', action='store_true', default=True,
                         help='HKGAN: 是否使用 SenticNet 知識增強')
     parser.add_argument('--no_senticnet', action='store_true', default=False,
                         help='HKGAN: 禁用 SenticNet 知識增強（消融實驗用）')
 
     # HKGAN v2.0 新增：Neutral 識別改進
-    parser.add_argument('--polarity_threshold', type=float, default=0.0,
-                        help='HKGAN 方案18A: |polarity| < threshold 的詞走 identity pass（0=關閉）')
-    parser.add_argument('--knowledge_warmup_epochs', type=int, default=0,
-                        help='HKGAN 方案18B: 前 N epoch 關閉知識通道，之後線性提升（0=關閉）')
     parser.add_argument('--use_confidence_gate', action='store_true', default=True,
                         help='HKGAN: 是否使用信心門控（動態調整 SenticNet 注入強度）')
     parser.add_argument('--no_confidence_gate', action='store_true', default=False,
@@ -1794,12 +1727,6 @@ def main():
                         help='動態計算 class weights (根據數據集分布自動調整)')
     parser.add_argument('--seed', type=int, default=42,
                         help='隨機種子（default: 42）')
-
-    # 對比學習參數
-    parser.add_argument('--contrastive_weight', type=float, default=0.0,
-                        help='對比損失權重 (0.0=禁用, 推薦 0.1-0.3)')
-    parser.add_argument('--contrastive_temperature', type=float, default=0.07,
-                        help='對比學習溫度參數 (default: 0.07)')
 
     # Layer-wise Learning Rate Decay (LLRD)
     parser.add_argument('--use_llrd', action='store_true',

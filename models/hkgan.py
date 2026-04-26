@@ -810,10 +810,11 @@ class HierarchicalGATLayer(nn.Module):
 
         # 添加門控值統計（用於分析和正則化）
         if all_gate_values:
-            avg_gate = torch.stack(all_gate_values, dim=0).mean(dim=0)  # [batch, seq_len]
+            avg_gate = torch.stack(all_gate_values, dim=0).mean(dim=0)  # [batch*max_aspects, seq_len]
             extras['confidence_gate_values'] = avg_gate.detach().cpu()
             extras['avg_confidence_gate'] = avg_gate.mean().item()
-            extras['gate_values_grad'] = avg_gate  # 保留梯度用於 Gate 正則化（不 detach）
+            # [batch*max_aspects]：每個 aspect 的平均知識門控強度，保留梯度供 gate penalty 使用
+            extras['gate_values_grad'] = avg_gate.mean(dim=-1)  # seq_len 維平均
 
         return h_out, extras
 
@@ -871,8 +872,7 @@ class HKGAN(nn.Module):
         use_dynamic_gate: bool = True,
         use_inter_aspect: bool = True,
         use_hierarchical_features: bool = True,
-        domain: str = None,
-        polarity_threshold: float = 0.0
+        domain: str = None
     ):
         super().__init__()
 
@@ -885,7 +885,6 @@ class HKGAN(nn.Module):
         self.use_inter_aspect = use_inter_aspect
         self.use_hierarchical_features = use_hierarchical_features
         self.domain = domain
-        self.polarity_threshold = polarity_threshold  # 方案18A：|polarity| < threshold 的詞走 identity pass
 
         # ========== 1. BERT Encoder ==========
         self.bert_absa = BERTForABSA(
@@ -900,7 +899,7 @@ class HKGAN(nn.Module):
 
         # ========== 2. SenticNet Knowledge（含領域過濾）==========
         if use_senticnet:
-            from utils.senticnet_loader import get_senticnet, reset_senticnet
+            from datasets.loader_knowledge import get_senticnet, reset_senticnet
             # 重置單例以確保領域設置生效
             reset_senticnet()
             self.senticnet = get_senticnet()
@@ -1108,9 +1107,7 @@ class HKGAN(nn.Module):
             # 使用新的帶覆蓋信息的查詢方法
             polarity, is_known = self.senticnet.get_polarity_with_coverage(token)
             polarity_list.append(polarity)
-            # 方案18A Selective Injection：|polarity| < threshold 的詞視為「未注入」
-            # threshold=0.0 時退化為原行為（只看 is_known）
-            if is_known and abs(polarity) >= self.polarity_threshold:
+            if is_known:
                 coverage_list.append(1.0)
             else:
                 coverage_list.append(0.0)
@@ -1334,6 +1331,16 @@ class HKGAN(nn.Module):
         logits = logits.masked_fill(~aspect_mask.unsqueeze(-1), 0.0)
 
         # 準備 extras
+        # 從 GAT extras 取出知識門控梯度（供 Gate Penalty 使用，必須保留梯度）
+        # low/mid/high_extras['gate_values_grad'] shape: [batch*max_aspects]
+        knowledge_gate_grad = None
+        for gat_ext in [low_extras, mid_extras, high_extras]:
+            if 'gate_values_grad' in gat_ext:
+                g = gat_ext['gate_values_grad']  # [batch*max_aspects]，已在 HierarchicalGAT 做 seq_len mean
+                knowledge_gate_grad = g if knowledge_gate_grad is None else knowledge_gate_grad + g
+        if knowledge_gate_grad is not None:
+            knowledge_gate_grad = knowledge_gate_grad / 3.0  # 三層平均
+
         extras = {
             'aspect_attention_weights': aspect_attn_weights.detach().cpu(),
             'gate_values': gate_values.squeeze(-1).detach().cpu(),
@@ -1355,6 +1362,10 @@ class HKGAN(nn.Module):
             'avg_sentiment_consistency': sentiment_consistency[aspect_mask.unsqueeze(-1).expand_as(sentiment_consistency)].mean().item() if aspect_mask.any() else 0.0,
             'consistency_strength': self.consistency_strength.item()
         }
+
+        # 知識門控梯度（Gate Penalty 使用，保留梯度，shape: [batch*max_aspects]）
+        if knowledge_gate_grad is not None:
+            extras['gate_values_grad'] = knowledge_gate_grad
 
         # 添加信心門控統計（用於分析 Neutral 識別效果）
         if self.use_confidence_gate and 'avg_confidence_gate' in low_extras:

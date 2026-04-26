@@ -1,34 +1,71 @@
 """
 批次執行實驗腳本
 
-用法：
-    # ── 單資料集：HKGAN ─────────────────────────────────────────
-    python run_experiments.py --dataset restaurants --hkgan [--multi-seed]
-    python run_experiments.py --dataset laptops     --hkgan [--multi-seed]
-    python run_experiments.py --dataset mams        --hkgan [--multi-seed]
-    python run_experiments.py --dataset rest16      --hkgan [--multi-seed]
-    python run_experiments.py --dataset lap16       --hkgan [--multi-seed]
+注意：下方命令請「照原樣」複製貼上。
+      有些參數是選填的，會用「# 可加」標示，需要時再自行補上。
 
-    # ── 單資料集：Baseline ──────────────────────────────────────
-    python run_experiments.py --dataset restaurants --baseline [--multi-seed]
-    python run_experiments.py --dataset laptops     --baseline [--multi-seed]
-    python run_experiments.py --dataset mams        --baseline [--multi-seed]
-    python run_experiments.py --dataset rest16      --baseline [--multi-seed]
-    python run_experiments.py --dataset lap16       --baseline [--multi-seed]
+════════════════════════════════════════════════════════════════
+ 單一資料集 ── HKGAN
+════════════════════════════════════════════════════════════════
+  python run_experiments.py --dataset restaurants --hkgan
+  python run_experiments.py --dataset laptops     --hkgan
+  python run_experiments.py --dataset mams        --hkgan
+  python run_experiments.py --dataset rest16      --hkgan
+  python run_experiments.py --dataset lap16       --hkgan
 
-    # ── 全資料集 ────────────────────────────────────────────────
-    python run_experiments.py --hkgan --full-run [--multi-seed] [--auto-cleanup]
-    python run_experiments.py --full-baseline    [--multi-seed]
+  # 想跑 5 個種子？在結尾加上 --multi-seed，例如：
+  python run_experiments.py --dataset laptops --hkgan --multi-seed
 
-    # ── 論文全流程（Baseline → HKGAN → 消融，5 資料集）─────────
-    python run_experiments.py --full-thesis --multi-seed --auto-cleanup
+════════════════════════════════════════════════════════════════
+ 單一資料集 ── Baseline
+════════════════════════════════════════════════════════════════
+  python run_experiments.py --dataset restaurants --baseline
+  python run_experiments.py --dataset laptops     --baseline
+  python run_experiments.py --dataset mams        --baseline
+  python run_experiments.py --dataset rest16      --baseline
+  python run_experiments.py --dataset lap16       --baseline
 
-    # ── 報告與統計（HKGAN 對比 + 統計顯著性 + 論文圖表）────────
-    python run_experiments.py --report-only          # 全資料集，自動跳過無資料者
+  # 想跑 5 個種子？在結尾加上 --multi-seed，例如：
+  python run_experiments.py --dataset laptops --baseline --multi-seed
 
-    # ── Checkpoint 清理 ─────────────────────────────────────────
-    python run_experiments.py --cleanup-only           # dry-run，列出將刪除的內容
-    python run_experiments.py --cleanup-only --execute  # 備份 txt → 刪除實驗資料夾
+════════════════════════════════════════════════════════════════
+ 全部 5 個資料集一起跑
+════════════════════════════════════════════════════════════════
+  # HKGAN（5 資料集）
+  python run_experiments.py --hkgan --full-run
+
+  # HKGAN（5 資料集 × 5 種子）
+  python run_experiments.py --hkgan --full-run --multi-seed
+
+  # HKGAN（5 資料集 × 5 種子，跑完自動清理多餘 checkpoint）
+  python run_experiments.py --hkgan --full-run --multi-seed --auto-cleanup
+
+  # Baseline（5 資料集）
+  python run_experiments.py --full-baseline
+
+  # Baseline（5 資料集 × 5 種子）
+  python run_experiments.py --full-baseline --multi-seed
+
+════════════════════════════════════════════════════════════════
+ 論文全流程（Baseline → HKGAN → 消融，5 資料集 × 5 種子）
+════════════════════════════════════════════════════════════════
+  python run_experiments.py --full-thesis --multi-seed --auto-cleanup
+
+════════════════════════════════════════════════════════════════
+ 只生成報告（不重新訓練）
+════════════════════════════════════════════════════════════════
+  python run_experiments.py --report-only
+  # 自動對全部資料集生成：HKGAN 對比表、統計顯著性、論文圖表
+  # 若某資料集尚無結果，會自動跳過
+
+════════════════════════════════════════════════════════════════
+ 清理多餘的 Checkpoint
+════════════════════════════════════════════════════════════════
+  # 預覽模式（只列出會刪什麼，不實際刪除）
+  python run_experiments.py --cleanup-only
+
+  # 實際執行（先備份 txt 報告，再刪除實驗資料夾）
+  python run_experiments.py --cleanup-only --execute
 """
 
 import subprocess
@@ -312,6 +349,7 @@ def run_multi_seed_hkgan(dataset, config_path):
 
     if success_count > 0:
         generate_hkgan_report(dataset)
+        run_ensemble_test(dataset)
 
     return success_count == len(MULTI_SEED_LIST)
 
@@ -501,12 +539,39 @@ def generate_multi_seed_report(dataset, results):
         report.append(f"  pos_suppress  分佈: { {f'{k:.1f}':v for k,v in sorted(ps_c.items())} }")
         report.append("")
 
-    report.append("=" * 80)
+    report += [
+        "",
+        f"  → Ensemble 結果詳見: results/HKGAN_Ensemble_{dataset}.txt",
+        "=" * 80,
+    ]
 
     report_text = "\n".join(report)
     output_file = reports_dir / f"HKGAN_MultiSeed_{dataset}.txt"
     output_file.write_text(report_text, encoding='utf-8')
     print(f"\n{report_text}\n報告已保存至: {output_file}")
+
+
+# ──────────────────────────────────────────────────────────────
+# Ensemble 推理（呼叫 utils/ensemble_runner.py，結果存檔）
+# ──────────────────────────────────────────────────────────────
+
+def run_ensemble_test(dataset):
+    """
+    5-seed 訓練完成後自動執行三策略 Ensemble 推理，
+    結果存至 results/HKGAN_Ensemble_{dataset}.txt。
+    """
+    print(f"\n{'='*60}\n[Ensemble] {get_display_name(dataset)} 三策略 Ensemble\n{'='*60}\n")
+    try:
+        from utils.ensemble_runner import run_ensemble
+        result = run_ensemble(dataset, save=True, verbose=True)
+        if result and result.get('output_path'):
+            print(f"\n[OK] Ensemble 報告已保存至: {result['output_path']}")
+        elif not result:
+            print(f"\n[WARN] Ensemble 無結果（checkpoint 不足或推理失敗）")
+    except KeyboardInterrupt:
+        print(f"\n[WARN] Ensemble 被中斷，繼續主流程\n")
+    except Exception as e:
+        print(f"\n[WARN] Ensemble 失敗: {e}，繼續主流程\n")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -865,6 +930,11 @@ def main():
             generate_hkgan_report(ds)
         run_statistical_significance_test()
         generate_thesis_figures()
+        # 對已有多 seed 結果的資料集重新產生 Ensemble 報告
+        for ds in ALL_DATASETS:
+            imp_dir = Path("results/improved") / ds
+            if imp_dir.exists() and any(imp_dir.glob("*/reports/experiment_results.json")):
+                run_ensemble_test(ds)
         return
 
     if args.full_thesis:

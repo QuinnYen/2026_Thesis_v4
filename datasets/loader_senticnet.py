@@ -1,13 +1,13 @@
 """
-SenticNet 5.0 Knowledge Base Loader
+SenticNet Knowledge Base Loader
 
 提供情感知識增強功能：
-- 從 SenticNet 5.0 加載詞彙情感極性
+- 從 SenticNet 加載詞彙情感極性（支援 SN5/6/7，格式相容）
 - 支援 ABSA 任務的知識注入
 - 高效的批量查詢和緩存機制
 - 領域特定遮罩（Domain-specific Filtering）解決技術術語誤判問題
 
-SenticNet 5.0 數據格式:
+SenticNet 數據格式（SN5/6/7 一致）:
     senticnet[concept] = [introspection, temper, attitude, sensitivity,
                          primary_emotion, secondary_emotion, polarity_label,
                          polarity_value, semantics1-5...]
@@ -18,8 +18,8 @@ SenticNet 5.0 數據格式:
 2. 未登錄詞標記：區分「中性詞（polarity=0）」與「未知詞」
 
 Reference:
-    Cambria et al. "SenticNet 5: Discovering Conceptual Primitives for
-    Sentiment Analysis by Means of Context Embeddings" (AAAI 2018)
+    Cambria et al. "SenticNet 7: Commonsense-Based Neurosymbolic AI for
+    Explainable Sentiment Analysis" (AAAI 2022)
 """
 
 import os
@@ -92,10 +92,10 @@ DOMAIN_TECHNICAL_TERMS = {
 
 class SenticNetKnowledge:
     """
-    SenticNet 5.0 情感知識庫加載器
+    SenticNet 情感知識庫加載器（SN7，向下相容 SN5/6）
 
     功能：
-    - 加載 SenticNet 5.0 詞彙表
+    - 加載 SenticNet 詞彙表（294k 概念）
     - 提供詞彙 → 情感極性映射 [-1, 1]
     - 支持批量查詢和緩存
     - 處理 BERT subword tokens
@@ -115,8 +115,8 @@ class SenticNetKnowledge:
         polarity, is_known = senticnet.get_polarity_with_coverage("unknown_word")
     """
 
-    # 默認 SenticNet 路徑
-    DEFAULT_PATH = "data/SenticNet_5.0/senticnet.py"
+    # 默認 SenticNet 路徑（SenticNet 7，格式與 SN5/6 相容）
+    DEFAULT_PATH = "data/SenticNet_7.0/senticnet.py"
 
     # 用於標記未登錄詞的特殊值（區分真正的中性 0.0）
     UNKNOWN_MARKER = float('nan')
@@ -588,25 +588,15 @@ _senticnet_instance: Optional[SenticNetKnowledge] = None
 
 
 def get_senticnet(path: str = None) -> SenticNetKnowledge:
-    """
-    獲取 SenticNet 單例實例
-
-    Args:
-        path: SenticNet 文件路徑（僅首次調用時有效）
-
-    Returns:
-        SenticNetKnowledge 實例
-    """
+    """獲取 SenticNet 單例實例"""
     global _senticnet_instance
-
     if _senticnet_instance is None:
         _senticnet_instance = SenticNetKnowledge(path)
-
     return _senticnet_instance
 
 
 def reset_senticnet():
-    """重置 SenticNet 單例（用於測試）"""
+    """重置 SenticNet 單例"""
     global _senticnet_instance
     _senticnet_instance = None
 
