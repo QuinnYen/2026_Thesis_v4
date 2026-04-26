@@ -1,11 +1,14 @@
 # =============================================================================
 # Tier 2 組件組合消融: w/o All Loss Engineering
 # =============================================================================
-# 移除所有損失函數工程：Focal Loss + Contrastive + Logit Adjustment
-# 改用標準 CrossEntropy Loss
-# 預期效果差異: 2-8%（驗證損失函數設計的整體貢獻）
+# 移除所有損失函數工程：Focal Loss → CrossEntropy，移除 class_weights
+# 預期效果差異: 2-5%（驗證損失函數設計的整體貢獻）
 #
-# 保留：HKGAN 架構, Knowledge Enhancement
+# 保留：HKGAN 架構, Knowledge Enhancement, LLRD
+#
+# 消融基準對齊（方案乙）：
+#   epochs=40, patience=12（對齊方案四）
+#   knowledge_weight=0.05（統一值）
 
 experiment_name: "ablation_no_all_loss_eng"
 
@@ -25,9 +28,9 @@ model:
   gat_heads: 4
   gat_layers: 2
 
-  # 知識增強（保留）
+  # 知識增強（保留，統一 weight）
   use_senticnet: true
-  knowledge_weight: 0.1
+  knowledge_weight: 0.05
   use_confidence_gate: true
   use_dynamic_gate: true
   domain: null
@@ -48,32 +51,35 @@ data:
 training:
   batch_size: 16
   accumulation_steps: 2
-  epochs: 30
+  epochs: 40
   lr: 3.0e-5
   weight_decay: 0.01
   grad_clip: 1.0
-  patience: 10
+  patience: 12
   seed: 42
 
   use_scheduler: true
   warmup_ratio: 0.1
 
   # === 移除所有 Loss Engineering ===
-  # 使用標準 CrossEntropy，不使用 Focal Loss
+  # 標準 CrossEntropy，等權重
   loss_type: "ce"
+  focal_gamma: 2.0
   class_weights: [1.0, 1.0, 1.0]
 
   virtual_weight: 0.5
 
-  # 保留 LLRD（這是優化器相關，不是 loss engineering）
+  # 保留 LLRD（優化器機制，非 loss engineering）
   use_llrd: true
   llrd_decay: 0.95
 
-  # 移除對比學習
-  contrastive_weight: 0.0
-  contrastive_temperature: 0.07
+  # 保留 Stratified Sampler
+  use_stratified_sampler: true
 
-  # 移除 Logit 調整
+  # Gate Penalty 關閉
+  gate_penalty_weight: 0.0
+
+  # 移除 Logit 調整（屬於 loss engineering 範疇）
   neutral_boost:
     default: 0.0
   neg_suppress:

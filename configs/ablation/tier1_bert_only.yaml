@@ -5,6 +5,10 @@
 # 預期效果差異: 5-15%（建立真正的下限基準）
 #
 # 這個配置使用 BERT-CLS baseline，不使用任何 HKGAN 組件
+#
+# 消融基準對齊（方案乙）：
+#   epochs=40, patience=12（對齊方案四）
+#   統一超參，不做 per-dataset routing
 
 experiment_name: "ablation_bert_only"
 
@@ -31,11 +35,11 @@ data:
 training:
   batch_size: 16
   accumulation_steps: 2
-  epochs: 30
+  epochs: 40
   lr: 3.0e-5
   weight_decay: 0.01
   grad_clip: 1.0
-  patience: 10
+  patience: 12
   seed: 42
 
   use_scheduler: true
@@ -52,8 +56,11 @@ training:
   use_llrd: false
   llrd_decay: 1.0
 
-  # 不使用對比學習
-  contrastive_weight: 0.0
+  # 不使用 Stratified Sampler（bert_only 不需要）
+  use_stratified_sampler: false
+
+  # 不使用 Gate Penalty
+  gate_penalty_weight: 0.0
 
   # 不使用 Logit 調整
   neutral_boost:

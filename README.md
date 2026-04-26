@@ -34,13 +34,15 @@
 
 ## 實驗結果（5 seeds 平均 ± 標準差）
 
-| 資料集 | Accuracy | Macro-F1 | vs. Baseline |
-|--------|----------|----------|-------------|
-| REST14 | 83.16% ± 0.63% | 75.66% ± 1.18% | +3.44% F1 |
-| LAP14  | 75.80% ± 0.78% | 71.59% ± 1.09% | +1.96% F1 |
-| REST16 | 89.03% ± 0.25% | 77.81% ± 0.74% | +7.95% F1 |
-| LAP16  | 83.31% ± 0.65% | 68.48% ± 0.78% | +1.81% F1 |
-| MAMS   | 84.57% ± 0.38% | 83.96% ± 0.43% | +0.91% F1 |
+| 資料集 | Macro-F1 (Solo) | Macro-F1 (Ensemble) | vs. Baseline |
+|--------|-----------------|---------------------|-------------|
+| REST14 | 75.34% ± 0.90% | **76.11%** | +3.79% F1 |
+| LAP14  | 70.85% ± 1.35% | **71.39%** | +2.48% F1 |
+| MAMS   | 84.29% ± 0.63% | **84.97%** | +2.39% F1 |
+| REST16 | 73.67% ± 2.37% | **74.42%** | +5.42% F1 |
+| LAP16  | 66.74% ± 0.93% | **67.93%** | +1.57% F1 |
+
+> Ensemble 策略：REST14/LAP14 採 Per-Seed Logit Adj → 等重，MAMS 採 Ensemble + Logit Adj，REST16/LAP16 採等重 Ensemble。
 
 ---
 
@@ -48,51 +50,63 @@
 
 ```
 2026_Thesis_v4/
-├── configs/                        # 配置檔案
-│   ├── unified_hkgan.yaml          # HKGAN 主模型配置
-│   ├── unified_baseline.yaml       # Baseline 配置
-│   └── ablation/                   # 消融實驗配置（5 個變體）
+├── configs/                              # 配置檔案
+│   ├── unified_hkgan.yaml                # HKGAN 主模型配置
+│   ├── unified_baseline.yaml             # Baseline 配置
+│   └── ablation/                         # 消融實驗配置（6 個變體）
+│       ├── ablation_full.yaml            # HKGAN Full（統一超參，消融基準線）
+│       ├── tier1_bert_only.yaml          # BERT-only
+│       ├── tier1_no_all_knowledge.yaml   # 移除知識增強模組
+│       ├── tier1_no_inter_aspect.yaml    # 移除 Inter-Aspect 模組
+│       ├── tier2_no_all_loss_engineering.yaml  # 移除損失函數工程
+│       └── tier2_no_knowledge_gating.yaml      # 移除知識門控
 │
-├── data/                           # 數據目錄
-│   ├── raw/                        # 原始數據（SemEval-2014/2016, MAMS）
-│   ├── dapt/                       # Domain-Adaptive Pre-Training 模型
-│   └── SenticNet_5.0/              # SenticNet 情感知識庫
+├── data/                                 # 數據目錄
+│   ├── raw/                              # 原始數據（SemEval-2014/2016, MAMS）
+│   ├── dapt/                             # Domain-Adaptive Pre-Training 模型
+│   └── SenticNet_5.0/                    # SenticNet 情感知識庫
 │
-├── models/                         # 模型定義
-│   ├── hkgan.py                    # HKGAN 主模型
-│   ├── bert_embedding.py           # BERT 特徵提取器
-│   ├── hierarchical_syntax.py      # 階層式語法模組
-│   └── base_model.py               # 基礎模型類
+├── datasets/                             # 資料集載入器
+│   ├── loader_semeval14.py               # SemEval-2014 載入
+│   ├── loader_semeval16.py               # SemEval-2016 載入
+│   ├── loader_mams.py                    # MAMS 載入
+│   ├── loader_knowledge.py               # SenticNet 知識載入
+│   └── multiaspect_dataset.py            # 多面向資料集封裝
 │
-├── experiments/                    # 實驗腳本
-│   ├── train_from_config.py        # 統一訓練入口
-│   ├── train_multiaspect.py        # 多面向訓練
-│   ├── improved_models.py          # 改進模型實現
-│   ├── baselines.py                # Baseline 模型
-│   ├── generate_hkgan_report.py    # HKGAN 報告生成
-│   ├── generate_ablation_report.py # 消融實驗報告
-│   └── plot_thesis_figures.py      # 論文圖表繪製
+├── models/                               # 模型定義
+│   ├── hkgan.py                          # HKGAN 主模型
+│   ├── bert_embedding.py                 # BERT 特徵提取器
+│   ├── hierarchical_syntax.py            # 階層式語法模組
+│   └── base_model.py                     # 基礎模型類
 │
-├── utils/                          # 工具模組
-│   ├── focal_loss.py               # Focal Loss 實現
-│   ├── senticnet_loader.py         # SenticNet 載入器
-│   ├── dataset_analyzer.py         # 數據集分析
-│   ├── model_selector.py           # 模型選擇器
-│   └── checkpoint_cleaner.py       # Checkpoint 自動清理
+├── experiments/                          # 實驗腳本
+│   ├── train_from_config.py              # 統一訓練入口（YAML 驅動）
+│   ├── train_multiaspect.py              # 多面向訓練核心
+│   ├── improved_models.py                # 改進模型選擇器
+│   ├── baselines.py                      # Baseline 模型
+│   ├── generate_hkgan_report.py          # HKGAN 報告生成
+│   ├── generate_ablation_report.py       # 消融實驗報告
+│   ├── generate_comprehensive_report.py  # 綜合比較報告
+│   └── plot_thesis_figures.py            # 論文圖表繪製
 │
-├── tests/                          # 工具腳本
-│   └── cleanup_checkpoints.py      # 手動清理 checkpoint（命令列入口）
+├── utils/                                # 工具模組
+│   ├── focal_loss.py                     # Focal Loss 實現
+│   ├── ensemble_runner.py                # Ensemble 推理模組（可 import）
+│   ├── dataset_analyzer.py               # 數據集統計分析
+│   ├── model_selector.py                 # 模型選擇器
+│   └── checkpoint_cleaner.py             # Checkpoint 自動清理
 │
-├── results/                        # 實驗結果
-│   ├── improved/                   # HKGAN 實驗結果
-│   ├── baseline/                   # Baseline 結果
-│   ├── ablation/                   # 消融實驗結果
-│   └── figures/                    # 生成的圖表
+├── results/                              # 實驗結果（.gitignore）
+│   ├── improved/                         # HKGAN 實驗結果
+│   ├── baseline/                         # Baseline 結果
+│   ├── ablation/                         # 消融實驗結果
+│   ├── HKGAN_Ensemble_{dataset}.txt      # Ensemble 報告
+│   └── figures/                          # 生成的圖表
 │
-├── docs/                           # 文件
-├── run_experiments.py              # 批次實驗執行腳本
-├── run_ablation.py                 # 消融實驗腳本
-└── requirements.txt                # 依賴套件
+├── docs/                                 # 文件
+├── run_experiments.py                    # 批次實驗執行腳本
+├── run_ablation.py                       # 消融實驗腳本
+└── requirements.txt                      # 依賴套件
 ```
 
 ---
@@ -171,8 +185,8 @@ python run_experiments.py --report-only
 ## 消融實驗
 
 ```bash
-# 完整消融研究（5 變體 × 5 資料集 × 5 seeds）
-python run_ablation.py --full-study --multi-seed
+# 完整消融研究（6 變體 × 5 資料集 × 5 seeds，訓練完自動清理）
+python run_ablation.py --full-study --multi-seed --auto-cleanup
 
 # 生成消融報告
 python run_ablation.py --report-only
@@ -180,10 +194,11 @@ python run_ablation.py --report-only
 
 | 消融變體 | 說明 |
 |----------|------|
+| `full` | HKGAN Full（統一超參，作為消融 delta 基準線）|
 | `bert_only` | 移除所有 HKGAN 組件，建立下限 |
 | `no_all_knowledge` | 移除整個知識增強模組（SenticNet + Gates）|
 | `no_inter_aspect` | 移除跨面向建模（IARN）|
-| `no_all_loss_eng` | 移除損失函數工程（Focal + Contrastive + Logit Adjust）|
+| `no_all_loss_eng` | 移除損失函數工程（Focal Loss + Logit Adjust）|
 | `no_knowledge_gating` | 移除知識門控（Confidence + Dynamic Gate）|
 
 ---
@@ -204,15 +219,37 @@ model:
   gat_heads: 4
   gat_layers: 2
   use_senticnet: true
-  knowledge_weight: 0.1
+  knowledge_weight:        # per-dataset（噪音資料集降至 0.02）
+    restaurants: 0.02
+    laptops: 0.02
+    mams: 0.02
+    rest16: 0.1
+    lap16: 0.05
+    default: 0.1
   use_dynamic_gate: true
+  domain: null             # 停用手工 Domain Filter
 
 training:
   batch_size: 16
-  epochs: 30
-  lr: 3.0e-5
+  accumulation_steps: 2   # 等效 batch=32
+  epochs: 40              # 方案四
+  patience: 12
+  lr:                      # per-dataset
+    restaurants: 3.0e-5
+    laptops: 3.0e-5
+    mams: 3.0e-5
+    rest16: 3.0e-5
+    lap16: 2.0e-5
+    default: 3.0e-5
   loss_type: "focal"
-  focal_gamma: 2.0
+  focal_gamma:             # per-dataset
+    restaurants: 2.5
+    laptops: 2.5
+    mams: 2.0
+    rest16: 2.0
+    lap16: 2.5
+    default: 2.0
+  use_stratified_sampler: true
 ```
 
 ### 主要訓練參數
@@ -221,9 +258,9 @@ training:
 |------|--------|------|
 | `batch_size` | 16 | 批次大小 |
 | `accumulation_steps` | 2 | 梯度累積（等效 batch=32）|
-| `epochs` | 30 | 訓練輪數 |
-| `lr` | 3e-5 | 學習率 |
-| `patience` | 10 | Early stopping 容忍度 |
+| `epochs` | 40 | 訓練輪數 |
+| `lr` | 3e-5（per-dataset）| 學習率 |
+| `patience` | 12 | Early stopping 容忍度 |
 | `loss_type` | focal | 損失函數（focal / ce）|
 
 ---

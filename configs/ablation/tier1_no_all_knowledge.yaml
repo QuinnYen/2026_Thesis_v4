@@ -2,9 +2,14 @@
 # Tier 1 核心架構消融: w/o All Knowledge
 # =============================================================================
 # 移除整個知識增強模組：SenticNet + Confidence Gate + Dynamic Gate
-# 預期效果差異: 5-15%（驗證知識增強整體價值）
+# 預期效果差異: 1-5%（驗證知識增強整體價值）
 #
 # 保留：Hierarchical GAT, Inter-Aspect Module, Loss Engineering
+#
+# 消融基準對齊（方案乙）：
+#   epochs=40, patience=12（對齊方案四）
+#   lr=3.0e-5, class_weights=[1.0,1.8,0.8]（統一超參，不做 per-dataset routing）
+#   knowledge_weight=0.0（移除知識，per-dataset routing 在此無意義）
 
 experiment_name: "ablation_no_all_knowledge"
 
@@ -47,20 +52,20 @@ data:
 training:
   batch_size: 16
   accumulation_steps: 2
-  epochs: 30
+  epochs: 40
   lr: 3.0e-5
   weight_decay: 0.01
   grad_clip: 1.0
-  patience: 10
+  patience: 12
   seed: 42
 
   use_scheduler: true
   warmup_ratio: 0.1
 
-  # 保留 Loss Engineering
+  # 保留 Loss Engineering（統一超參）
   loss_type: "focal"
   focal_gamma: 2.0
-  class_weights: [0.8, 1.8, 0.8]
+  class_weights: [1.0, 1.8, 0.8]
 
   virtual_weight: 0.5
 
@@ -68,16 +73,15 @@ training:
   use_llrd: true
   llrd_decay: 0.95
 
-  # 保留對比學習
-  contrastive_weight: 0.1
-  contrastive_temperature: 0.07
+  # 保留 Stratified Sampler（runtime 自動判斷 minority<5% 才啟用）
+  use_stratified_sampler: true
 
-  # Logit 調整由驗證集 Grid Search 自動決定，初始值均為 0.0
+  # Gate Penalty 關閉
+  gate_penalty_weight: 0.0
+
   neutral_boost:
     default: 0.0
-
   neg_suppress:
     default: 0.0
-
   pos_suppress:
     default: 0.0

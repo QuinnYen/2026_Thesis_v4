@@ -1,17 +1,20 @@
 # =============================================================================
-# Tier 1 核心架構消融: w/o Inter-Aspect Module
+# 消融基準：完整 HKGAN（統一超參版）
 # =============================================================================
-# 移除 Inter-Aspect Attention + Sentiment-Aware Isolation
-# 預期效果差異: 0-2%（驗證多面向處理的貢獻）
+# 用途：消融實驗的 full model 基準線
+#       與各消融變體用完全相同的統一超參，差值才有意義
 #
-# 保留：Knowledge Enhancement, Hierarchical GAT, Loss Engineering
+# 注意：此 config 不是論文主實驗用的（主實驗用 configs/unified_hkgan.yaml，含 per-dataset routing）
+#       這裡故意不做 per-dataset routing，保持和消融變體一致
 #
-# 消融基準對齊（方案乙）：
+# 對齊設定（方案乙）：
 #   epochs=40, patience=12（對齊方案四）
-#   lr=3.0e-5, class_weights=[1.0,1.8,0.8]（統一超參，不做 per-dataset routing）
-#   knowledge_weight=0.05（各 dataset 的折衷值，統一使用）
+#   lr=3.0e-5（統一）
+#   knowledge_weight=0.05（各 dataset 的折衷值：rest14/lap14/mams=0.02~0.1 的中間）
+#   class_weights=[1.0,1.8,0.8]（通用值）
+#   focal_gamma=2.0（通用值）
 
-experiment_name: "ablation_no_inter_aspect"
+experiment_name: "ablation_full"
 
 model:
   improved: "hkgan"
@@ -25,19 +28,18 @@ model:
   hidden_dim: 768
   dropout: 0.3
 
-  # GAT 參數（保留）
+  # GAT 參數
   gat_heads: 4
   gat_layers: 2
 
-  # 知識增強（保留，統一 weight）
+  # 知識增強（全開，統一 weight）
   use_senticnet: true
   knowledge_weight: 0.05
   use_confidence_gate: true
   use_dynamic_gate: true
   domain: null
 
-  # === 移除 Inter-Aspect 模組 ===
-  use_inter_aspect: false
+  # Inter-Aspect（全開）
   iarm_heads: 4
 
 data:
@@ -63,18 +65,18 @@ training:
   use_scheduler: true
   warmup_ratio: 0.1
 
-  # 保留 Loss Engineering（統一超參）
+  # Loss Engineering（統一超參）
   loss_type: "focal"
   focal_gamma: 2.0
   class_weights: [1.0, 1.8, 0.8]
 
   virtual_weight: 0.5
 
-  # 保留 LLRD
+  # LLRD
   use_llrd: true
   llrd_decay: 0.95
 
-  # 保留 Stratified Sampler
+  # Stratified Sampler
   use_stratified_sampler: true
 
   # Gate Penalty 關閉

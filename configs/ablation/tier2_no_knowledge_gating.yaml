@@ -2,9 +2,13 @@
 # Tier 2 組件組合消融: w/o Knowledge Gating
 # =============================================================================
 # 同時移除 Confidence Gate + Dynamic Gate，保留 SenticNet 硬性注入
-# 預期效果差異: 1-4%（驗證門控機制的整體價值）
+# 預期效果差異: 0-2%（驗證門控機制的整體價值）
 #
-# 保留：SenticNet (硬性注入), Hierarchical GAT, Loss Engineering
+# 保留：SenticNet（硬性注入）, Hierarchical GAT, Loss Engineering
+#
+# 消融基準對齊（方案乙）：
+#   epochs=40, patience=12（對齊方案四）
+#   knowledge_weight=0.05（統一值，無門控的硬性注入用中間值）
 
 experiment_name: "ablation_no_knowledge_gating"
 
@@ -24,10 +28,9 @@ model:
   gat_heads: 4
   gat_layers: 2
 
-  # === SenticNet 保留但移除門控 ===
+  # === SenticNet 保留但移除所有門控 ===
   use_senticnet: true
-  knowledge_weight: 0.1
-  # 移除兩個門控
+  knowledge_weight: 0.05
   use_confidence_gate: false
   use_dynamic_gate: false
   domain: null
@@ -48,20 +51,20 @@ data:
 training:
   batch_size: 16
   accumulation_steps: 2
-  epochs: 30
+  epochs: 40
   lr: 3.0e-5
   weight_decay: 0.01
   grad_clip: 1.0
-  patience: 10
+  patience: 12
   seed: 42
 
   use_scheduler: true
   warmup_ratio: 0.1
 
-  # 保留 Loss Engineering
+  # 保留 Loss Engineering（統一超參）
   loss_type: "focal"
   focal_gamma: 2.0
-  class_weights: [0.8, 1.8, 0.8]
+  class_weights: [1.0, 1.8, 0.8]
 
   virtual_weight: 0.5
 
@@ -69,16 +72,15 @@ training:
   use_llrd: true
   llrd_decay: 0.95
 
-  # 保留對比學習
-  contrastive_weight: 0.1
-  contrastive_temperature: 0.07
+  # 保留 Stratified Sampler
+  use_stratified_sampler: true
 
-  # Logit 調整由驗證集 Grid Search 自動決定，初始值均為 0.0
+  # Gate Penalty 關閉
+  gate_penalty_weight: 0.0
+
   neutral_boost:
     default: 0.0
-
   neg_suppress:
     default: 0.0
-
   pos_suppress:
     default: 0.0
