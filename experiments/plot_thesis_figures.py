@@ -117,7 +117,7 @@ def get_multiseed_data():
         # 讀取所有 Baseline 實驗（多種子）並計算平均
         bl_dir = baseline_dir / ds
         if bl_dir.exists():
-            exp_dirs = list(bl_dir.glob("*_baseline_*"))
+            exp_dirs = list(bl_dir.glob("*_baseline_*")) + list(bl_dir.glob("*_ablation_bert_only*"))
             bl_f1_scores = []
             bl_auc_scores = []
             bl_neu_f1_scores = []
@@ -610,7 +610,7 @@ def get_all_seed_f1_scores():
         # 讀取所有 Baseline 實驗（多種子）
         bl_dir = baseline_dir / ds
         if bl_dir.exists():
-            exp_dirs = list(bl_dir.glob("*_baseline_*"))
+            exp_dirs = list(bl_dir.glob("*_baseline_*")) + list(bl_dir.glob("*_ablation_bert_only*"))
             seeds_seen = set()
 
             for exp in exp_dirs:

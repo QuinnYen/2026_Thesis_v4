@@ -31,24 +31,37 @@ def get_display_name(dataset):
 
 
 def find_experiments(results_dir, dataset):
-    """查找 Baseline 和 HKGAN 實驗"""
+    """查找 Baseline 和 HKGAN 實驗（收集所有 seed 目錄）"""
     experiments = {
-        'baseline': None,
-        'hkgan': None
+        'baseline': None,   # 最新單筆（備用）
+        'hkgan': None,      # 最新單筆（備用）
+        'baseline_dirs': [],
+        'hkgan_dirs': [],
     }
 
-    # 查找 baseline 實驗
+    MULTI_SEED_LIST = [42, 123, 2023, 999, 0]
+
+    # 查找 baseline 實驗（全部 seed）
     baseline_dir = results_dir / "baseline" / dataset
     if baseline_dir.exists():
         for exp_dir in sorted(baseline_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
             if not exp_dir.is_dir():
                 continue
             dir_name = exp_dir.name
-            if '_baseline_bert_cls' in dir_name or '_baseline_bert_only' in dir_name:
-                experiments['baseline'] = exp_dir
-                break
+            if '_baseline_bert_cls' in dir_name or '_baseline_bert_only' in dir_name or '_ablation_bert_only' in dir_name:
+                rf = exp_dir / "reports" / "experiment_results.json"
+                if rf.exists():
+                    try:
+                        data = json.load(open(rf))
+                        seed = data.get('args', {}).get('seed', -1)
+                        if seed in MULTI_SEED_LIST:
+                            experiments['baseline_dirs'].append(exp_dir)
+                    except Exception:
+                        pass
+                    if experiments['baseline'] is None:
+                        experiments['baseline'] = exp_dir
 
-    # 查找 HKGAN 實驗
+    # 查找 HKGAN 實驗（全部 seed）
     improved_dir = results_dir / "improved" / dataset
     if improved_dir.exists():
         for exp_dir in sorted(improved_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
@@ -56,10 +69,92 @@ def find_experiments(results_dir, dataset):
                 continue
             dir_name = exp_dir.name
             if '_hkgan' in dir_name:
-                experiments['hkgan'] = exp_dir
-                break
+                rf = exp_dir / "reports" / "experiment_results.json"
+                if rf.exists():
+                    try:
+                        data = json.load(open(rf))
+                        seed = data.get('args', {}).get('seed', -1)
+                        if seed in MULTI_SEED_LIST:
+                            experiments['hkgan_dirs'].append(exp_dir)
+                    except Exception:
+                        pass
+                if experiments['hkgan'] is None:
+                    experiments['hkgan'] = exp_dir
 
     return experiments
+
+
+def read_metrics_multiseed(exp_dirs):
+    """從多個 seed 目錄讀取並聚合指標（平均值）。"""
+    import numpy as np
+    if not exp_dirs:
+        return None
+
+    accs, f1s, f1_negs, f1_neus, f1_poss, aucs = [], [], [], [], [], []
+    best_epoch_list = []
+    confusion_sum = None
+    sample = None
+
+    for exp_dir in exp_dirs:
+        rf = exp_dir / "reports" / "experiment_results.json"
+        if not rf.exists():
+            continue
+        try:
+            data = json.load(open(rf))
+            tm = data.get('test_metrics', {})
+            acc = tm.get('accuracy')
+            f1  = tm.get('f1_macro')
+            fpc = tm.get('f1_per_class', [])
+            auc = tm.get('auc_macro')
+            cm  = tm.get('confusion_matrix')
+
+            if acc is not None: accs.append(acc)
+            if f1  is not None: f1s.append(f1)
+            if len(fpc) >= 3:
+                f1_negs.append(fpc[0]); f1_neus.append(fpc[1]); f1_poss.append(fpc[2])
+            if auc is not None: aucs.append(auc)
+
+            # 混淆矩陣加總
+            if cm is not None:
+                cm_arr = np.array(cm)
+                confusion_sum = cm_arr if confusion_sum is None else confusion_sum + cm_arr
+
+            # best_epoch（從 history 推算）
+            val_f1_list = data.get('history', {}).get('val_f1_macro', [])
+            best_val = data.get('best_val_f1')
+            if val_f1_list and best_val is not None:
+                for i, v in enumerate(val_f1_list):
+                    if abs(v - best_val) < 1e-6:
+                        best_epoch_list.append(i + 1)
+                        break
+
+            if sample is None:
+                sample = exp_dir
+        except Exception:
+            pass
+
+    if not f1s:
+        return None
+
+    def mean(lst): return float(np.mean(lst)) if lst else None
+
+    metrics = {
+        'test_acc':         mean(accs),
+        'test_f1':          mean(f1s),
+        'test_f1_std':      float(np.std(f1s)) if len(f1s) > 1 else 0.0,
+        'test_f1_neg':      mean(f1_negs),
+        'test_f1_neu':      mean(f1_neus),
+        'test_f1_pos':      mean(f1_poss),
+        'test_auc_macro':   mean(aucs),
+        'test_auc_weighted':None,
+        'val_f1':           None,
+        'best_epoch':       int(round(np.mean(best_epoch_list))) if best_epoch_list else None,
+        'n_seeds':          len(f1s),
+        'confusion_matrix': confusion_sum.tolist() if confusion_sum is not None else None,
+        'exp_name':         sample.name if sample else '',
+        'timestamp':        None,
+    }
+    return metrics
 
 
 def read_metrics(exp_dir):
@@ -176,25 +271,38 @@ def generate_report(dataset, baseline_metrics, hkgan_metrics):
     report.append(f"{'Model':<20} {'Acc (%)':>12} {'Macro-F1 (%)':>14} {'AUC (%)':>12} {'Best Epoch':>12}")
     report.append("-" * 80)
 
+    def fmt_f1(m):
+        """格式化 F1，若有 std 則顯示 Mean±Std。"""
+        if m is None or m.get('test_f1') is None:
+            return "N/A"
+        v = m['test_f1'] * 100
+        std = m.get('test_f1_std', 0)
+        n = m.get('n_seeds', 1)
+        return f"{v:.2f}±{std*100:.2f}" if n > 1 else f"{v:.2f}"
+
     # Baseline
-    if baseline_metrics and baseline_metrics.get('test_acc'):
+    if baseline_metrics and baseline_metrics.get('test_acc') is not None:
+        n_b = baseline_metrics.get('n_seeds', 1)
+        n_tag = f" ({n_b}-seed mean)" if n_b > 1 else ""
         acc = f"{baseline_metrics['test_acc']*100:.2f}"
-        f1 = f"{baseline_metrics['test_f1']*100:.2f}" if baseline_metrics.get('test_f1') else "N/A"
+        f1  = fmt_f1(baseline_metrics)
         auc = f"{baseline_metrics['test_auc_macro']*100:.2f}" if baseline_metrics.get('test_auc_macro') else "N/A"
         epoch = f"{baseline_metrics.get('best_epoch', 'N/A')}"
-        report.append(f"{'Baseline (BERT-CLS)':<20} {acc:>12} {f1:>14} {auc:>12} {epoch:>12}")
+        report.append(f"{'Baseline (BERT-CLS)':<20} {acc:>12} {f1:>18} {auc:>12} {epoch:>12}{n_tag}")
     else:
-        report.append(f"{'Baseline (BERT-CLS)':<20} {'N/A':>12} {'N/A':>14} {'N/A':>12} {'N/A':>12}")
+        report.append(f"{'Baseline (BERT-CLS)':<20} {'N/A':>12} {'N/A':>18} {'N/A':>12} {'N/A':>12}")
 
     # HKGAN
-    if hkgan_metrics and hkgan_metrics.get('test_acc'):
+    if hkgan_metrics and hkgan_metrics.get('test_acc') is not None:
+        n_h = hkgan_metrics.get('n_seeds', 1)
+        n_tag = f" ({n_h}-seed mean)" if n_h > 1 else ""
         acc = f"{hkgan_metrics['test_acc']*100:.2f}"
-        f1 = f"{hkgan_metrics['test_f1']*100:.2f}" if hkgan_metrics.get('test_f1') else "N/A"
+        f1  = fmt_f1(hkgan_metrics)
         auc = f"{hkgan_metrics['test_auc_macro']*100:.2f}" if hkgan_metrics.get('test_auc_macro') else "N/A"
         epoch = f"{hkgan_metrics.get('best_epoch', 'N/A')}"
-        report.append(f"{'HKGAN (Ours)':<20} {acc:>12} {f1:>14} {auc:>12} {epoch:>12}")
+        report.append(f"{'HKGAN (Ours)':<20} {acc:>12} {f1:>18} {auc:>12} {epoch:>12}{n_tag}")
     else:
-        report.append(f"{'HKGAN (Ours)':<20} {'N/A':>12} {'N/A':>14} {'N/A':>12} {'N/A':>12}")
+        report.append(f"{'HKGAN (Ours)':<20} {'N/A':>12} {'N/A':>18} {'N/A':>12} {'N/A':>12}")
 
     report.append("-" * 80)
     report.append("")
@@ -355,8 +463,17 @@ def main():
         print(f"\n處理 {display_name} 數據集...")
 
         experiments = find_experiments(results_dir, dataset)
-        baseline_metrics = read_metrics(experiments['baseline'])
-        hkgan_metrics = read_metrics(experiments['hkgan'])
+
+        # 優先用多 seed 聚合；若不足則 fallback 單筆
+        if experiments['baseline_dirs']:
+            baseline_metrics = read_metrics_multiseed(experiments['baseline_dirs'])
+        else:
+            baseline_metrics = read_metrics(experiments['baseline'])
+
+        if experiments['hkgan_dirs']:
+            hkgan_metrics = read_metrics_multiseed(experiments['hkgan_dirs'])
+        else:
+            hkgan_metrics = read_metrics(experiments['hkgan'])
 
         if baseline_metrics is None and hkgan_metrics is None:
             print(f"  ✗ 未找到任何實驗結果")

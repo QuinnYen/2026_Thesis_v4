@@ -58,6 +58,10 @@
   # 自動對全部資料集生成：HKGAN 對比表、統計顯著性、論文圖表
   # 若某資料集尚無結果，會自動跳過
 
+  python run_experiments.py --ensemble-only
+  # 只跑 Ensemble 推理（三策略），結果存 results/HKGAN_Ensemble_{dataset}.txt
+  # Ensemble 結果不納入主實驗，按需執行
+
 ════════════════════════════════════════════════════════════════
  清理多餘的 Checkpoint
 ════════════════════════════════════════════════════════════════
@@ -375,20 +379,21 @@ def get_latest_experiment_result(results_dir):
 
 
 def get_baseline_result(dataset):
-    """讀取最新 baseline 實驗目錄的 test_metrics。"""
+    """讀取最新 baseline 實驗目錄的 test_metrics（相容 bert_cls 與 bert_only 目錄名）。"""
     baseline_dir = Path("results/baseline") / dataset
     if not baseline_dir.exists():
         return None
-    exp_dirs = sorted(baseline_dir.glob("*_baseline_*"),
-                      key=lambda x: x.stat().st_mtime, reverse=True)
-    if not exp_dirs:
-        return None
-    result_file = exp_dirs[0] / "reports" / "experiment_results.json"
-    if result_file.exists():
-        try:
-            return json.load(open(result_file)).get('test_metrics', {})
-        except Exception:
-            pass
+    candidates = sorted(
+        list(baseline_dir.glob("*_baseline_*")) + list(baseline_dir.glob("*_ablation_bert_only*")),
+        key=lambda x: x.stat().st_mtime, reverse=True
+    )
+    for exp_dir in candidates:
+        result_file = exp_dir / "reports" / "experiment_results.json"
+        if result_file.exists():
+            try:
+                return json.load(open(result_file)).get('test_metrics', {})
+            except Exception:
+                pass
     return None
 
 
@@ -613,16 +618,16 @@ def run_statistical_significance_test(datasets=None):
                         hkgan_f1_by_seed[seed]  = m.get('f1_macro', 0) * 100
                         hkgan_acc_by_seed[seed] = m.get('accuracy', 0) * 100
 
-        # 讀取 Baseline 結果
+        # 讀取 Baseline 結果（相容 *_baseline_* 和 *_ablation_bert_only*）
         bl_dir = baseline_dir / dataset
         if bl_dir.exists():
-            for exp in bl_dir.glob("*_baseline_*"):
+            for exp in list(bl_dir.glob("*_baseline_*")) + list(bl_dir.glob("*_ablation_bert_only*")):
                 rf = exp / "reports" / "experiment_results.json"
                 if rf.exists():
                     data = json.load(open(rf))
                     seed = data.get('args', {}).get('seed', 42)
                     m    = data.get('test_metrics', {})
-                    if seed in MULTI_SEED_LIST:
+                    if seed in MULTI_SEED_LIST and seed not in baseline_f1_by_seed:
                         baseline_f1_by_seed[seed]  = m.get('f1_macro', 0) * 100
                         baseline_acc_by_seed[seed] = m.get('accuracy', 0) * 100
 
@@ -914,6 +919,7 @@ def main():
     parser.add_argument('--full-baseline',    action='store_true', help='對所有資料集執行 Baseline')
     parser.add_argument('--full-thesis',      action='store_true', help='論文全流程：Baseline → HKGAN → 消融')
     parser.add_argument('--report-only',      action='store_true', help='只生成報告（HKGAN 對比 + 統計顯著性 + 圖表），不訓練')
+    parser.add_argument('--ensemble-only',    action='store_true', help='只跑 Ensemble 推理（三策略），結果存 HKGAN_Ensemble_{dataset}.txt')
     parser.add_argument('--auto-cleanup',     action='store_true', help='實驗後自動清理多餘 checkpoint')
     parser.add_argument('--cleanup-only',     action='store_true', help='獨立清理模式（預設 dry-run）')
     parser.add_argument('--execute',          action='store_true', help='搭配 --cleanup-only，實際執行刪除')
@@ -924,17 +930,22 @@ def main():
         _backup_and_cleanup(execute=args.execute)
         return
 
-    if args.report_only:
-        # 永遠跑全部資料集，generate_hkgan_report / run_statistical_significance_test 內部自動跳過無資料者
-        for ds in ALL_DATASETS:
-            generate_hkgan_report(ds)
-        run_statistical_significance_test()
-        generate_thesis_figures()
-        # 對已有多 seed 結果的資料集重新產生 Ensemble 報告
+    if args.ensemble_only:
+        # 只跑 Ensemble 推理，結果存 HKGAN_Ensemble_{dataset}.txt
         for ds in ALL_DATASETS:
             imp_dir = Path("results/improved") / ds
             if imp_dir.exists() and any(imp_dir.glob("*/reports/experiment_results.json")):
                 run_ensemble_test(ds)
+            else:
+                print(f"  [{get_display_name(ds)}] 無 HKGAN 結果，跳過")
+        return
+
+    if args.report_only:
+        # HKGAN 對比報告 + 統計顯著性 + 論文圖表（不含 Ensemble）
+        for ds in ALL_DATASETS:
+            generate_hkgan_report(ds)
+        run_statistical_significance_test()
+        generate_thesis_figures()
         return
 
     if args.full_thesis:
