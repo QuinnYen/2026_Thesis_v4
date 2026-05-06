@@ -5,9 +5,10 @@ Multi-Aspect HMAC-Net Training Script
 真正發揮 PMAC 和 IARM 創新模組的作用
 """
 
+import random
+from collections import Counter
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.amp import autocast, GradScaler
@@ -17,8 +18,7 @@ from pathlib import Path
 import sys
 from tqdm import tqdm
 import numpy as np
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
-from sklearn.preprocessing import label_binarize
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score, confusion_matrix
 import json
 from datetime import datetime
 import matplotlib
@@ -88,17 +88,7 @@ def load_soft_labels(soft_labels_file: str, dataset: str) -> dict:
 
 
 def generate_training_visualizations(results, save_dir):
-    """
-    生成所有訓練曲線圖表
-
-    生成的圖表：
-    1. loss_and_accuracy.png - 損失函數與準確率曲線圖
-    2. learning_curves.png - 學習曲線（F1 Score）
-    3. train_val_comparison.png - Train vs Val 對比圖
-    4. confusion_matrix.png - 混淆矩陣
-    """
-    from sklearn.metrics import confusion_matrix
-
+    """生成訓練曲線圖表與報告（loss/accuracy/F1/confusion matrix）"""
     plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'Arial Unicode MS', 'DejaVu Sans']
     plt.rcParams['axes.unicode_minus'] = False
     sns.set_style("whitegrid")
@@ -107,9 +97,6 @@ def generate_training_visualizations(results, save_dir):
     epochs = history['epochs']
     test_metrics = results.get('test_metrics', {})
 
-    # 靜默生成圖表
-
-    # ========== 1. 損失函數與準確率曲線圖 (Loss and Accuracy Curves) ==========
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle('Loss and Accuracy Curves', fontsize=16, fontweight='bold')
 
@@ -144,7 +131,6 @@ def generate_training_visualizations(results, save_dir):
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    # ========== 2. 學習曲線 (Learning Curves) - F1 Score ==========
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle('Learning Curves (F1 Score)', fontsize=16, fontweight='bold')
 
@@ -181,7 +167,6 @@ def generate_training_visualizations(results, save_dir):
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    # ========== 3. Train vs Val 對比圖 ==========
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle('Train vs Validation Comparison', fontsize=16, fontweight='bold')
 
@@ -231,7 +216,6 @@ def generate_training_visualizations(results, save_dir):
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    # ========== 4. 混淆矩陣 (Confusion Matrix) ==========
     if 'confusion_matrix' in test_metrics:
         cm = np.array(test_metrics['confusion_matrix'])
 
@@ -367,22 +351,9 @@ def generate_training_visualizations(results, save_dir):
 
 def create_llrd_optimizer(model, base_lr, weight_decay, llrd_decay=0.95):
     """
-    創建帶有 Layer-wise Learning Rate Decay (LLRD) 的優化器
-
-    設計理念：
-        - 高層 (靠近 Output): 保持 base_lr，快速適應 ABSA 任務
-        - 底層 (靠近 Input): 較小 lr，保留 BERT 原本的通用特徵
-
-    參數:
-        model: 模型
-        base_lr: 基礎學習率 (用於最高層和非 BERT 參數)
-        weight_decay: 權重衰減
-        llrd_decay: 衰減係數 (default: 0.95，每往下一層 LR 乘上此係數)
-
-    返回:
-        AdamW optimizer with layer-wise learning rates
+    創建帶有 Layer-wise Learning Rate Decay (LLRD) 的 AdamW 優化器。
+    高層（靠近輸出）使用 base_lr，底層（靠近輸入）逐層遞減。
     """
-    # 找到 BERT 模型
     bert_model = None
     if hasattr(model, 'bert_absa'):
         bert_model = model.bert_absa.bert_embedding.bert
@@ -394,15 +365,11 @@ def create_llrd_optimizer(model, base_lr, weight_decay, llrd_decay=0.95):
         print("  LLRD: BERT model not found, using uniform lr")
         return torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=weight_decay)
 
-    # 分組參數
     param_groups = []
     no_decay = ['bias', 'LayerNorm.weight', 'LayerNorm.bias', 'layer_norm']
+    num_layers = 12  # layer 0 (最低) 到 layer 11 (最高)
 
-    # BERT 有 12 層 encoder layers (layer 0-11)
-    # 我們希望: layer 11 (最高) 用 base_lr, layer 0 (最低) 用 base_lr * decay^11
-    num_layers = 12
-
-    # 1. BERT embeddings (最底層，學習率最小)
+    # BERT embeddings（最底層）
     embedding_lr = base_lr * (llrd_decay ** (num_layers + 1))
     embedding_params = []
     embedding_params_no_decay = []
@@ -426,7 +393,6 @@ def create_llrd_optimizer(model, base_lr, weight_decay, llrd_decay=0.95):
             'weight_decay': 0.0
         })
 
-    # 2. BERT encoder layers (layer 0-11)
     for layer_idx in range(num_layers):
         layer_lr = base_lr * (llrd_decay ** (num_layers - layer_idx - 1))
         layer_params = []
@@ -452,7 +418,6 @@ def create_llrd_optimizer(model, base_lr, weight_decay, llrd_decay=0.95):
                 'weight_decay': 0.0
             })
 
-    # 3. BERT pooler (如果存在)
     if hasattr(bert_model, 'pooler') and bert_model.pooler is not None:
         pooler_params = []
         pooler_params_no_decay = []
@@ -475,7 +440,7 @@ def create_llrd_optimizer(model, base_lr, weight_decay, llrd_decay=0.95):
                 'weight_decay': 0.0
             })
 
-    # 4. 非 BERT 參數 (classifier, attention layers 等) - 使用 base_lr
+    # 非 BERT 參數（classifier 等）使用 base_lr
     bert_param_ids = set()
     for param in bert_model.parameters():
         bert_param_ids.add(id(param))
@@ -502,7 +467,6 @@ def create_llrd_optimizer(model, base_lr, weight_decay, llrd_decay=0.95):
             'weight_decay': 0.0
         })
 
-    # 打印 LLRD 信息
     print(f"  LLRD enabled: decay={llrd_decay}")
     print(f"    Embeddings lr: {embedding_lr:.2e}")
     print(f"    Layer 0 lr:    {base_lr * (llrd_decay ** 11):.2e}")
@@ -519,29 +483,13 @@ def compute_multi_aspect_loss(
     is_virtual: torch.Tensor = None,
     virtual_weight: float = 0.5
 ):
-    """
-    計算 multi-aspect 損失
-
-    參數:
-        logits: [batch, max_aspects, num_classes]
-        labels: [batch, max_aspects] (-100 表示 ignore)
-        aspect_mask: [batch, max_aspects] - bool
-        is_virtual: [batch, max_aspects] - bool，標記虛擬 aspects
-        virtual_weight: 虛擬 aspect 的損失權重
-
-    返回:
-        loss: scalar
-    """
+    """計算 multi-aspect CE 損失，虛擬 aspect 使用 virtual_weight 降權。"""
     batch_size, max_aspects, num_classes = logits.shape
 
-    # Flatten
-    logits_flat = logits.view(-1, num_classes)  # [batch * max_aspects, 3]
-    labels_flat = labels.view(-1)  # [batch * max_aspects]
+    logits_flat = logits.view(-1, num_classes)
+    labels_flat = labels.view(-1)
 
-    # 計算損失（ignore_index=-100 會自動跳過）
     loss = F.cross_entropy(logits_flat, labels_flat, ignore_index=-100, reduction='none')
-
-    # 重塑回原形狀
     loss = loss.view(batch_size, max_aspects)
 
     # 如果有虛擬 aspect，降低其權重
@@ -579,16 +527,7 @@ def analyze_gate_statistics(all_gates):
 
 
 def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, collect_gates=False, return_confusion_matrix=False, return_predictions=False, return_raw_logits=False):
-    """
-    評估 multi-aspect 模型
-
-    返回 aspect-level 指標（展開為獨立的 aspect-sentiment pairs）
-    同時計算 validation loss
-
-    參數:
-        return_confusion_matrix: 是否返回混淆矩陣（用於視覺化）
-        return_predictions: 是否返回預測資料（用於 ROC 曲線）
-    """
+    """評估 multi-aspect 模型，返回 aspect-level 指標與 validation loss。"""
     model.eval()
 
     valid_preds = []
@@ -596,16 +535,15 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     valid_probs = []  # 收集預測概率（用於 AUC）
     total_loss = 0.0
     num_batches = 0
-    all_gates = []  # 收集所有gate值
-    layer_attention_weights = None  # 收集 HBL 的 layer attention 權重
-    all_branch_weights = []  # 收集 AH-IARN 的分支權重
-    hsa_level_weights = None  # 收集 HSA 層級權重
-    raw_logits_list = []   # 收集 raw logits（用於 grid search，已展平為有效 aspect）
-    raw_labels_list = []   # 收集對應 labels（用於 grid search，已展平）
+    all_gates = []
+    layer_attention_weights = None
+    all_branch_weights = []
+    hsa_level_weights = None
+    raw_logits_list = []
+    raw_labels_list = []
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating", ascii=True, leave=False, ncols=80, file=sys.stderr):
-            # 使用新的 sentence-pair 格式
             pair_ids = batch['pair_input_ids'].to(device)
             pair_mask = batch['pair_attention_mask'].to(device)
             pair_type_ids = batch['pair_token_type_ids'].to(device)
@@ -613,10 +551,9 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
             aspect_mask = batch['aspect_mask'].to(device)
             is_virtual = batch['is_virtual'].to(device)
 
-            # Forward with sentence-pair format
             logits, extras = model(pair_ids, pair_mask, pair_type_ids, aspect_mask)
 
-            # 收集 gate 統計（PMAC 模組）或 layer attention（HBL 模組）或 branch weights（AH-IARN）
+
             if extras is not None:
                 if isinstance(extras, dict):
                     # HBL 模型：收集 layer attention 權重
@@ -633,17 +570,15 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
                     # PMAC 模型：收集 gate 值
                     all_gates.extend(extras.cpu().numpy().flatten().tolist())
 
-            # 收集 raw logits（用於事後 grid search，展平為有效 aspect）
             if return_raw_logits:
-                _logits_cpu = logits.cpu()    # [B, A, 3]
-                _labels_cpu = labels.cpu()    # [B, A]
-                _mask_cpu   = aspect_mask.cpu()  # [B, A]
+                _logits_cpu = logits.cpu()
+                _labels_cpu = labels.cpu()
+                _mask_cpu = aspect_mask.cpu()
                 _valid = _mask_cpu & (_labels_cpu != -100)
                 if _valid.any():
                     raw_logits_list.append(_logits_cpu[_valid])   # [valid, 3]
                     raw_labels_list.append(_labels_cpu[_valid])   # [valid]
 
-            # 計算 loss（與訓練時使用相同的 loss 函數）
             if loss_fn is not None and args is not None:
                 if args.loss_type == 'distill':
                     # 蒸餾模式驗證時：使用不帶 soft labels 的 focal loss
@@ -700,10 +635,9 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
 
                 preds = torch.argmax(adjusted_logits, dim=-1)
             else:
-                preds = torch.argmax(logits, dim=-1)  # [batch, max_aspects]
-            probs = torch.softmax(logits, dim=-1)  # [batch, max_aspects, num_classes] 用於 AUC
+                preds = torch.argmax(logits, dim=-1)
+            probs = torch.softmax(logits, dim=-1)
 
-            # 直接展開為 aspect-level（過濾無效和虛擬 aspects）
             preds_cpu = preds.cpu()
             labels_cpu = labels.cpu()
             probs_cpu = probs.cpu()
@@ -716,29 +650,21 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
                         valid_labels.append(labels_cpu[i, j].item())
                         valid_probs.append(probs_cpu[i, j].numpy())  # [num_classes]
 
-    # 計算指標
     accuracy = accuracy_score(valid_labels, valid_preds)
     f1_macro = f1_score(valid_labels, valid_preds, average='macro')
     precision = precision_score(valid_labels, valid_preds, average='macro', zero_division=0)
     recall = recall_score(valid_labels, valid_preds, average='macro', zero_division=0)
 
-    # 每類 F1
     f1_per_class = f1_score(valid_labels, valid_preds, average=None, zero_division=0)
 
-    # 計算 AUC (macro 和 weighted)
     auc_macro = None
     auc_weighted = None
     try:
-        # 將概率轉換為 numpy array
-        valid_probs_array = np.array(valid_probs)  # [num_samples, num_classes]
+        valid_probs_array = np.array(valid_probs)
         valid_labels_array = np.array(valid_labels)
-
-        # 計算每個類別的樣本數
         unique_labels = np.unique(valid_labels_array)
 
-        # 只有當至少有 2 個類別時才計算 AUC
         if len(unique_labels) >= 2:
-            # One-vs-Rest AUC
             auc_macro = roc_auc_score(
                 valid_labels_array,
                 valid_probs_array,
@@ -754,10 +680,8 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     except Exception as e:
         print(f"  警告: 無法計算 AUC ({str(e)})")
 
-    # 計算平均 loss
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
-    # 分析gate統計
     gate_analysis = None
     if collect_gates and all_gates:
         gate_analysis = analyze_gate_statistics(all_gates)
@@ -776,25 +700,16 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
     if gate_analysis is not None:
         result['gate_stats'] = gate_analysis
 
-    # 加入 layer attention 權重（HBL 特有）
     if layer_attention_weights is not None:
         result['layer_attention'] = layer_attention_weights.tolist()
 
-    # 加入 AH-IARN 分支權重統計
     if all_branch_weights:
-        # numpy 已經在文件開頭導入
-        # 拼接所有批次的分支權重: [num_batches, batch, max_aspects, 3]
-        # 需要計算平均權重
         all_weights = []
         for batch_weights in all_branch_weights:
-            # batch_weights: [batch, max_aspects, 3]
             if isinstance(batch_weights, torch.Tensor):
                 batch_weights = batch_weights.numpy()
-            # 展平為 [num_valid_aspects, 3]
             for sample_weights in batch_weights:
-                # sample_weights: [max_aspects, 3]
                 for aspect_weights in sample_weights:
-                    # 過濾掉全零的（無效 aspect）
                     if np.sum(aspect_weights) > 0:
                         all_weights.append(aspect_weights)
 
@@ -807,7 +722,6 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
                 'IARN': float(avg_weights[2])
             }
 
-    # 加入 HSA 層級權重
     if hsa_level_weights is not None:
         result['hsa_level_weights'] = {
             'Token': float(hsa_level_weights[0]),
@@ -815,13 +729,10 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
             'Clause': float(hsa_level_weights[2])
         }
 
-    # 加入混淆矩陣（用於視覺化）
     if return_confusion_matrix:
-        from sklearn.metrics import confusion_matrix
         cm = confusion_matrix(valid_labels, valid_preds, labels=[0, 1, 2])
         result['confusion_matrix'] = cm.tolist()
 
-    # 加入預測資料（用於 ROC 曲線）
     if return_predictions:
         result['predictions'] = {
             'y_true': valid_labels,
@@ -832,10 +743,9 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
             'class_names': ['Negative', 'Neutral', 'Positive']
         }
 
-    # 回傳 raw logits（供 grid search 使用，已展平為有效 aspect）
     if return_raw_logits and raw_logits_list:
-        result['raw_logits'] = torch.cat(raw_logits_list, dim=0)   # [total_valid, 3]
-        result['raw_labels'] = torch.cat(raw_labels_list, dim=0)   # [total_valid]
+        result['raw_logits'] = torch.cat(raw_logits_list, dim=0)
+        result['raw_labels'] = torch.cat(raw_labels_list, dim=0)
 
     return result
 
@@ -843,58 +753,45 @@ def evaluate_multi_aspect(model, dataloader, device, loss_fn=None, args=None, co
 def train_multiaspect_model(args):
     """訓練 Multi-Aspect 模型"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # 創建時間戳資料夾
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     project_root = Path(__file__).parent.parent
 
-    # 實驗名稱（基於配置）
     if args.baseline:
         # Baseline 實驗
         exp_name = f"baseline_{args.baseline}"
         exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
         exp_name += f"_{args.loss_type}"
     elif args.improved:
-        # Improved 實驗
         exp_name = f"improved_{args.improved}"
-        # 如果使用 LLRD，加入標記以區分
         if args.use_llrd:
             exp_name += "_llrd"
         exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
         exp_name += f"_{args.loss_type}"
     else:
-        # Improved 實驗 (沒有指定 --baseline 時)
         exp_name = f"improved_{args.improved}"
         exp_name += f"_drop{args.dropout}_bs{args.batch_size}x{args.accumulation_steps}"
         exp_name += f"_{args.loss_type}"
 
-    # 如果有指定 experiment_name，使用它（消融實驗會用到）
     if args.experiment_name:
         exp_name = args.experiment_name
 
-    # 時間戳實驗資料夾
-    # Baseline 實驗保存在 results/baseline/{dataset}/ 下
-    # Ablation 實驗保存在 results/ablation/{dataset}/ 下
-    # Improved 實驗保存在 results/improved/{dataset}/ 下
     if args.baseline:
         exp_dir = project_root / 'results' / 'baseline' / args.dataset / f"{timestamp}_{exp_name}"
     elif exp_name.startswith('ablation'):
-        # 消融實驗
         exp_dir = project_root / 'results' / 'ablation' / args.dataset / f"{timestamp}_{exp_name}"
     else:
-        # Improved 模型
         exp_dir = project_root / 'results' / 'improved' / args.dataset / f"{timestamp}_{exp_name}"
 
     checkpoints_dir = exp_dir / 'checkpoints'
     visualizations_dir = exp_dir / 'visualizations'
     reports_dir = exp_dir / 'reports'
 
-    # 創建所有資料夾
     for dir_path in [checkpoints_dir, visualizations_dir, reports_dir]:
         dir_path.mkdir(parents=True, exist_ok=True)
 
     print(f"  Output: {exp_dir.name}")
 
-    # ========== HKGAN v2.0/v3.0: 處理 Confidence Gate、Dynamic Gate 和 Domain 參數 ==========
+    # 消融實驗開關處理
     # 如果使用 --no_senticnet，覆蓋 use_senticnet（消融實驗用）
     if args.no_senticnet:
         args.use_senticnet = False
@@ -903,21 +800,14 @@ def train_multiaspect_model(args):
     if args.no_confidence_gate:
         args.use_confidence_gate = False
 
-    # 如果使用 --no_dynamic_gate，覆蓋 use_dynamic_gate (v3.0)
+    # 如果使用 --no_dynamic_gate，覆蓋 use_dynamic_gate
     if args.no_dynamic_gate:
         args.use_dynamic_gate = False
 
-    # 消融實驗用：處理 Inter-Aspect 和 Hierarchical Features 參數
     if args.no_inter_aspect:
         args.use_inter_aspect = False
     if args.no_hierarchical_features:
         args.use_hierarchical_features = False
-
-    # Domain Filter 已停用（方案二十七，2026-04-24）
-    # 原本會自動推斷 domain 並啟用手工技術術語過濾表，
-    # 但 'cheap'/'slow'/'crowded' 等詞在評論中實為負面，強制歸零反而干擾 Gate 學習。
-    # Dynamic Gate（v3.0）已能自動學習何時信任 SenticNet，Filter 屬冗餘。
-    # args.domain 維持 None，SenticNetKnowledge.set_domain() 不會被呼叫。
 
     # 加載數據
 
@@ -1032,7 +922,6 @@ def train_multiaspect_model(args):
     # 顯示類別分布
     def count_label_distribution(samples):
         """統計樣本的類別分布"""
-        from collections import Counter
         label_counts = Counter()
         for sample in samples:
             for label in sample.labels:
@@ -1049,31 +938,25 @@ def train_multiaspect_model(args):
         pct = count / total * 100 if total > 0 else 0
         print(f"    {label_names.get(label, f'Label {label}'):10}: {count:5} ({pct:5.1f}%)")
 
-    # 自動模型選擇
     if args.auto_select and not args.baseline and not args.improved:
-        # 分析數據集特徵
         dataset_stats = analyze_dataset(train_samples)
         print_dataset_stats(dataset_stats, args.dataset.upper())
 
-        # 自動選擇模型
         selected_model, reason = select_model(dataset_stats)
         print_selection_result(selected_model, reason)
 
-        # 設定模型類型
         args.improved = selected_model
 
-        # 應用推薦配置
         recommended_config = get_model_config(selected_model, args.dataset)
         if args.dropout == 0.1:  # 使用默認值時才覆蓋
             args.dropout = recommended_config['dropout']
 
-    # 加載 tokenizer (DeBERTa-v3 需要使用 slow tokenizer 以避免兼容性問題)
+    # DeBERTa-v3 需要使用 slow tokenizer
     if 'deberta-v3' in args.bert_model.lower():
         tokenizer = DebertaV2Tokenizer.from_pretrained(args.bert_model)
     else:
         tokenizer = AutoTokenizer.from_pretrained(args.bert_model)
 
-    # 如果是知識蒸餾模式，載入 soft labels
     soft_labels_dict = None
     if args.loss_type == 'distill':
         soft_labels_dict = load_soft_labels(
@@ -1084,7 +967,6 @@ def train_multiaspect_model(args):
             print("  [Warning] Falling back to focal loss (no soft labels)")
             args.loss_type = 'focal'
 
-    # 創建 DataLoaders
     train_loader, val_loader, test_loader = create_multiaspect_dataloaders(
         train_samples=train_samples,
         val_samples=val_samples,
@@ -1098,7 +980,6 @@ def train_multiaspect_model(args):
         use_stratified_sampler=getattr(args, 'use_stratified_sampler', False)
     )
 
-    # 創建模型
     print("\n" + "-"*60)
 
     if args.baseline:
@@ -1113,14 +994,6 @@ def train_multiaspect_model(args):
         ).to(device)
     else:
         print(f"Creating Model: {args.improved}")
-        # 獲取配置中的參數 (如果有)
-        multi_aspect_threshold = getattr(args, 'multi_aspect_threshold', 0.5)
-        selection_mode = getattr(args, 'selection_mode', 'soft')
-        num_attention_heads = getattr(args, 'num_attention_heads', 4)
-        num_syntax_layers = getattr(args, 'num_syntax_layers', 2)
-        router_type = getattr(args, 'router_type', 'confidence')
-        freeze_experts = getattr(args, 'freeze_experts', False)
-
         model = create_improved_model(
             model_type=args.improved,
             args=args,
@@ -1139,7 +1012,6 @@ def train_multiaspect_model(args):
     if args.neutral_boost != 0.0:
         print(f"  Neutral Boost: +{args.neutral_boost} (logit offset for Neutral class)")
 
-    # 優化器 (支援 LLRD)
     if args.use_llrd:
         optimizer = create_llrd_optimizer(
             model,
@@ -1150,13 +1022,11 @@ def train_multiaspect_model(args):
     else:
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    # 學習率調度器（Cosine Annealing + Warmup）
     scheduler = None
     if args.use_scheduler:
         total_steps = len(train_loader) * args.epochs // args.accumulation_steps
         warmup_steps = int(args.warmup_ratio * total_steps)
 
-        # Warmup: 從 0.01*lr 線性增加到 lr
         warmup_scheduler = LinearLR(
             optimizer,
             start_factor=0.01,
@@ -1164,14 +1034,12 @@ def train_multiaspect_model(args):
             total_iters=warmup_steps
         )
 
-        # Cosine Annealing: 從 lr 降到 1e-7
         cosine_scheduler = CosineAnnealingLR(
             optimizer,
             T_max=total_steps - warmup_steps,
             eta_min=1e-7
         )
 
-        # 組合調度器
         scheduler = SequentialLR(
             optimizer,
             schedulers=[warmup_scheduler, cosine_scheduler],
@@ -1179,13 +1047,11 @@ def train_multiaspect_model(args):
         )
         print(f"  Scheduler: Warmup({warmup_steps}) + Cosine({total_steps - warmup_steps})")
 
-    # 訓練
     print("\n" + "-"*60)
-    # 混合精度訓練 (AMP) - DeBERTa 在 FP16/BF16 下都會溢出，必須禁用
+    # DeBERTa 在 FP16/BF16 下注意力計算會溢出，必須禁用 AMP
     is_deberta = 'deberta' in args.bert_model.lower()
 
     if device.type == 'cuda' and is_deberta:
-        # DeBERTa 的注意力機制在混合精度下會溢出，必須使用 FP32
         use_amp = False
         amp_dtype = torch.float32
         print("Training [FP32] (DeBERTa requires full precision)")
@@ -1205,7 +1071,6 @@ def train_multiaspect_model(args):
     best_epoch = 0
     patience_counter = 0
 
-    # 記錄訓練歷史
     history = {
         'train_loss': [],
         'val_loss': [],
@@ -1218,15 +1083,12 @@ def train_multiaspect_model(args):
     }
 
     for epoch in range(args.epochs):
-
-        # 訓練階段
         model.train()
         train_loss = 0
         train_steps = 0
 
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}", ascii=True, ncols=80, file=sys.stderr)
         for batch_idx, batch in enumerate(progress_bar):
-            # 使用新的 sentence-pair 格式
             pair_ids = batch['pair_input_ids'].to(device)
             pair_mask = batch['pair_attention_mask'].to(device)
             pair_type_ids = batch['pair_token_type_ids'].to(device)
@@ -1234,11 +1096,9 @@ def train_multiaspect_model(args):
             aspect_mask = batch['aspect_mask'].to(device)
             is_virtual = batch['is_virtual'].to(device)
 
-            # Forward + Loss (with AMP autocast)
             with autocast(device_type='cuda', dtype=amp_dtype, enabled=use_amp):
                 logits, extras = model(pair_ids, pair_mask, pair_type_ids, aspect_mask)
 
-                # Loss
                 if args.loss_type == 'distill':
                     # 知識蒸餾損失
                     soft_labels = batch['soft_labels'].to(device)
@@ -1261,17 +1121,9 @@ def train_multiaspect_model(args):
                             virtual_weight=args.virtual_weight
                         ).to(device)
 
-                        # 創建對比損失函數（如果啟用）
-                        if use_contrastive and 'contrastive_loss_fn' not in locals():
-                            contrastive_loss_fn = MultiAspectContrastiveLoss(
-                                temperature=args.contrastive_temperature,
-                                contrastive_weight=args.contrastive_weight
-                            ).to(device)
-
                     loss = distill_loss_fn(logits, labels, soft_labels, aspect_mask, is_virtual)
 
                 elif args.loss_type != 'ce':
-                    # 使用 Focal Loss 或 Adaptive Loss
                     if 'loss_fn' not in locals():
                         # 決定 class weights
                         if args.auto_class_weights:
@@ -1289,42 +1141,33 @@ def train_multiaspect_model(args):
 
                     loss = loss_fn(logits, labels, aspect_mask, is_virtual)
                 else:
-                    # 使用標準 CE Loss
                     loss = compute_multi_aspect_loss(
                         logits, labels, aspect_mask, is_virtual,
                         virtual_weight=args.virtual_weight
                     )
 
                 # Gate Penalty：對預測錯誤的 aspect 懲罰高 gate 值
-                # 邏輯：若知識注入（高 gate）反而導致預測錯誤，Gate 應學會降低信任
                 gate_penalty_weight = getattr(args, 'gate_penalty_weight', 0.0)
                 if (gate_penalty_weight > 0.0
                         and extras is not None
                         and 'gate_values_grad' in extras):
-                    # gate_flat: [batch*max_aspects]，每個 aspect 的平均知識門控強度
-                    gate_flat = extras['gate_values_grad']  # 保留梯度
-                    # reshape 成 [batch, max_aspects] 與 labels/logits 對齊（從 labels shape 取維度）
+                    gate_flat = extras['gate_values_grad']
                     b, m = labels.shape
                     gate_per_aspect = gate_flat.view(b, m)
-                    # wrong_mask: 預測錯誤且為有效 aspect 的位置
                     with torch.no_grad():
-                        preds = logits.argmax(dim=-1)  # [batch, max_aspects]
+                        preds = logits.argmax(dim=-1)
                         wrong_mask = (preds != labels) & aspect_mask & (labels != -100)
-                    # 只對預測錯誤的位置施加懲罰（gate 越高懲罰越重）
                     n_wrong = wrong_mask.float().sum().clamp(min=1)
                     gate_penalty = (gate_per_aspect * wrong_mask.float()).sum() / n_wrong
                     loss = loss + gate_penalty_weight * gate_penalty
 
-                # 梯度累積：將 loss 除以累積步數
                 loss = loss / args.accumulation_steps
 
-            # Backward (with AMP scaler for FP16, direct backward for BF16/FP32)
             if scaler.is_enabled():
                 scaler.scale(loss).backward()
             else:
                 loss.backward()
 
-            # 每 accumulation_steps 步更新一次參數
             if (batch_idx + 1) % args.accumulation_steps == 0:
                 if scaler.is_enabled():
                     scaler.unscale_(optimizer)
@@ -1336,11 +1179,10 @@ def train_multiaspect_model(args):
                     optimizer.step()
                 optimizer.zero_grad()
 
-                # 更新學習率
                 if scheduler is not None:
                     scheduler.step()
 
-            train_loss += loss.item() * args.accumulation_steps  # 恢復原始 loss 用於顯示
+            train_loss += loss.item() * args.accumulation_steps
             train_steps += 1
 
             # 顯示當前學習率
@@ -1350,13 +1192,11 @@ def train_multiaspect_model(args):
                 'lr': f'{current_lr:.2e}'
             })
 
-        # 關閉進度條，避免輸出混亂
         progress_bar.close()
 
         avg_train_loss = train_loss / train_steps
 
-        # 驗證階段 - 傳入 loss_fn 和 args 以計算 validation loss
-        # 對於 distillation，驗證時使用 focal loss (不使用 soft labels)
+        # 驗證（distillation 模式下使用 distill_loss_fn 計算 val loss）
         if args.loss_type == 'distill':
             loss_fn_for_eval = distill_loss_fn if 'distill_loss_fn' in locals() else None
         elif args.loss_type != 'ce':
@@ -1365,7 +1205,6 @@ def train_multiaspect_model(args):
             loss_fn_for_eval = None
         val_metrics = evaluate_multi_aspect(model, val_loader, device, loss_fn_for_eval, args)
 
-        # 記錄歷史數據
         history['epochs'].append(epoch + 1)
         history['train_loss'].append(float(avg_train_loss))
         history['val_loss'].append(float(val_metrics.get('loss', 0)))
@@ -1375,18 +1214,15 @@ def train_multiaspect_model(args):
         history['val_recall'].append(float(val_metrics['recall']))
         history['val_f1_per_class'].append([float(f1) for f1 in val_metrics['f1_per_class']])
 
-        # 簡化的 epoch 輸出（AGG 風格）
         val_f1 = val_metrics['f1_macro']
         val_acc = val_metrics['accuracy']
         f1_per_class = val_metrics['f1_per_class']
 
-        # Early stopping 檢查
         improved = val_f1 > best_val_f1
         if improved:
             best_val_f1 = val_f1
             best_epoch = epoch + 1
             patience_counter = 0
-            # 保存最佳模型
             save_path = checkpoints_dir / f'best_model_epoch{epoch+1}_f1_{best_val_f1:.4f}.pt'
             torch.save(model.state_dict(), save_path)
             status = f"★ Best"
@@ -1394,7 +1230,6 @@ def train_multiaspect_model(args):
             patience_counter += 1
             status = f"P:{patience_counter}/{args.patience}"
 
-        # 單行輸出：Epoch | Loss | Acc | F1 | Per-class F1 | Status
         print(f"  [{epoch+1:02d}/{args.epochs}] Loss:{avg_train_loss:.4f} | Acc:{val_acc:.4f} | "
               f"F1:{val_f1:.4f} [N:{f1_per_class[0]:.2f} U:{f1_per_class[1]:.2f} P:{f1_per_class[2]:.2f}] | {status}")
 
@@ -1402,18 +1237,14 @@ def train_multiaspect_model(args):
             print(f"\n  Early stopping at epoch {epoch+1}")
             break
 
-    # 測試階段
     print("\n" + "-"*60)
     print(f"Testing (Best: Epoch {best_epoch}, Val F1: {best_val_f1:.4f})")
     print("-"*60)
 
-    # 加載最佳模型
     best_model_path = checkpoints_dir / f'best_model_epoch{best_epoch}_f1_{best_val_f1:.4f}.pt'
     model.load_state_dict(torch.load(best_model_path, map_location=device))
 
-    # ── 驗證集 Grid Search：自動搜尋最佳非對稱 Logit 調整值 ──────────────────
-    # 用驗證集 raw logits 窮舉 96 組組合，找讓 val macro-F1 最高的參數
-    # 方法合法：僅使用 val 集，不觸碰測試集
+    # 驗證集 Grid Search：窮舉最佳非對稱 Logit 調整值（僅用 val 集，不觸碰測試集）
     _neutral_grid = [0.0, 0.3, 0.5, 0.8, 1.0, 1.2]
     _neg_grid     = [0.0, 0.2, 0.4, 0.6]
     _pos_grid     = [0.0, 0.3, 0.5, 0.8]
@@ -1423,8 +1254,8 @@ def train_multiaspect_model(args):
         model, val_loader, device, loss_fn=None, args=None,
         return_raw_logits=True
     )
-    _flat_logits = _val_raw['raw_logits']   # [total_valid, 3]（已在收集時展平）
-    _flat_labels = _val_raw['raw_labels']   # [total_valid]
+    _flat_logits = _val_raw['raw_logits']
+    _flat_labels = _val_raw['raw_labels']
 
     best_gs_f1  = -1.0
     best_neutral = getattr(args, 'neutral_boost', 0.0)
@@ -1454,13 +1285,10 @@ def train_multiaspect_model(args):
           f"neg_suppress={best_neg:.1f} pos_suppress={best_pos:.1f} "
           f"→ val F1={best_gs_f1:.4f}")
 
-    # 將搜尋結果覆寫到 args，後續測試集評估會自動套用
     args.neutral_boost = best_neutral
     args.neg_suppress  = best_neg
     args.pos_suppress  = best_pos
-    # ─────────────────────────────────────────────────────────────────────
 
-    # 測試集評估（也計算 loss）
     loss_fn_for_eval = loss_fn if args.loss_type != 'ce' else None
     test_metrics = evaluate_multi_aspect(
         model, test_loader, device, loss_fn_for_eval, args,
@@ -1469,7 +1297,6 @@ def train_multiaspect_model(args):
         return_predictions=True  # 收集預測資料用於 ROC 曲線
     )
 
-    # 簡化的測試結果輸出
     test_f1_class = test_metrics['f1_per_class']
     auc_str = f" | AUC: {test_metrics['auc_macro']:.4f}" if test_metrics.get('auc_macro') else ""
     print(f"  Acc: {test_metrics['accuracy']:.4f} | F1: {test_metrics['f1_macro']:.4f}{auc_str} "
@@ -1485,7 +1312,6 @@ def train_multiaspect_model(args):
         bw = test_metrics['branch_weights']
         print(f"  Branch Weights: Hier={bw['Hierarchical']:.3f} HSA={bw['HSA']:.3f} IARN={bw['IARN']:.3f}")
 
-    # 保存結果（排除 predictions，因為它會單獨保存到 predictions_for_roc.json）
     results = {
         'args': vars(args),
         'best_val_f1': float(best_val_f1),
@@ -1500,40 +1326,33 @@ def train_multiaspect_model(args):
                         for k, v in test_metrics.items() if k != 'predictions'}
     }
 
-    # 單獨保存 layer_attention 到頂層，方便報告生成器讀取
     if 'layer_attention' in test_metrics:
         results['layer_attention'] = test_metrics['layer_attention']
 
-    # 單獨保存 branch_weights 和 hsa_level_weights 到頂層
     if 'branch_weights' in test_metrics:
         results['branch_weights'] = test_metrics['branch_weights']
     if 'hsa_level_weights' in test_metrics:
         results['hsa_level_weights'] = test_metrics['hsa_level_weights']
 
-    # 保存結果到時間戳資料夾
     results_path = reports_dir / 'experiment_results.json'
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
 
-    # 保存實驗配置
     config_path = reports_dir / 'experiment_config.json'
     with open(config_path, 'w') as f:
         json.dump(vars(args), f, indent=2, default=str)
 
-    # 保存 ROC 曲線用的預測資料
     if 'predictions' in test_metrics:
         roc_path = reports_dir / 'predictions_for_roc.json'
         with open(roc_path, 'w', encoding='utf-8') as f:
             json.dump(test_metrics['predictions'], f, indent=2)
         print(f"  ROC data saved: {roc_path.name}")
 
-    # 自動生成訓練曲線圖表（靜默模式）
     try:
         generate_training_visualizations(results, visualizations_dir)
     except Exception as e:
         print(f"  [WARNING] Visualization failed: {e}")
 
-    # 生成實驗摘要
     summary_path = reports_dir / 'experiment_summary.txt'
     with open(summary_path, 'w', encoding='utf-8') as f:
         f.write("="*80 + "\n")
@@ -1576,7 +1395,6 @@ def train_multiaspect_model(args):
         f.write(f"  配置JSON: {config_path}\n")
         f.write(f"  可視化: {visualizations_dir}\n")
 
-    # 完成訊息
     print("\n" + "="*60)
     print(f"DONE | Test F1: {test_metrics['f1_macro']:.4f} | Saved: {exp_dir.name}")
     print("="*60)
@@ -1671,15 +1489,14 @@ def main():
     parser.add_argument('--no_senticnet', action='store_true', default=False,
                         help='HKGAN: 禁用 SenticNet 知識增強（消融實驗用）')
 
-    # HKGAN v2.0 新增：Neutral 識別改進
     parser.add_argument('--use_confidence_gate', action='store_true', default=True,
                         help='HKGAN: 是否使用信心門控（動態調整 SenticNet 注入強度）')
     parser.add_argument('--no_confidence_gate', action='store_true', default=False,
                         help='HKGAN: 禁用信心門控')
     parser.add_argument('--use_dynamic_gate', action='store_true', default=True,
-                        help='HKGAN v3.0: 是否使用動態知識門控（解決 MAMS 複雜句問題）')
+                        help='HKGAN: 是否使用動態知識門控')
     parser.add_argument('--no_dynamic_gate', action='store_true', default=False,
-                        help='HKGAN v3.0: 禁用動態知識門控')
+                        help='HKGAN: 禁用動態知識門控')
     parser.add_argument('--domain', type=str, default=None,
                         help='HKGAN: 領域名稱，用於領域過濾（如不指定，將自動根據數據集推斷）')
 
@@ -1753,7 +1570,6 @@ def main():
     args = parser.parse_args()
 
     # 設置隨機種子（確保可重現性）
-    import random
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
