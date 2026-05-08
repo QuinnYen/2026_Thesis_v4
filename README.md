@@ -179,7 +179,7 @@ pip install -r requirements.txt
 
 ```bash
 # 多種子 HKGAN（seeds: 42, 123, 2023, 999, 0）
-python run_experiments.py --hkgan --full-run --multi-seed
+python run_experiments.py --full-thesis --multi-seed --auto-cleanup
 ```
 
 ### 全消融實驗
