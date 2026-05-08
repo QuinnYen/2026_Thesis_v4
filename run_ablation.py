@@ -51,7 +51,8 @@
 ════════════════════════════════════════════════════════════════
  只生成報告（不重新訓練）
 ════════════════════════════════════════════════════════════════
-  python run_ablation.py --report-only
+  # 跨資料集總結報告（所有變體 × 所有資料集，輸出至 results/ablation/ablation_summary.txt）
+  python run_ablation.py --summary-only
 
 ════════════════════════════════════════════════════════════════
  工具
@@ -433,6 +434,9 @@ def run_all_ablations(dataset, multi_seed=False, variants=None):
         print(f"  {ablation_type:<20s}: {status:<10s} ({desc})")
     print(f"{'='*80}\n")
 
+    # 生成跨資料集總結報告
+    generate_ablation_summary_report()
+
 
 def run_full_study(multi_seed=False):
     """執行完整消融研究（所有變體 × 所有資料集）
@@ -467,6 +471,9 @@ def run_full_study(multi_seed=False):
     for dataset, status in all_results.items():
         print(f"  {DATASET_DISPLAY_NAMES.get(dataset, dataset.upper()):<12s}: {status}")
     print(f"{'='*80}\n")
+
+    # 生成跨資料集總結報告
+    generate_ablation_summary_report()
 
 
 def _get_ablation_full_f1(dataset):
@@ -705,8 +712,8 @@ def main():
     # 執行完整消融研究（所有變體 × 所有資料集）
     python run_ablation.py --full-study
 
-    # 生成消融報告
-    python run_ablation.py --report-only
+    # 只生成跨資料集總結報告（不重新訓練）
+    python run_ablation.py --summary-only
 
     # 列出所有可用的消融變體
     python run_ablation.py --list
@@ -726,8 +733,8 @@ def main():
                         help='執行所有消融變體（需指定 --dataset）')
     parser.add_argument('--full-study', action='store_true',
                         help='執行完整消融研究（所有變體 × 所有資料集）')
-    parser.add_argument('--report-only', action='store_true',
-                        help='只生成消融報告（不執行實驗）')
+    parser.add_argument('--summary-only', action='store_true',
+                        help='只生成跨資料集消融總結報告（不執行實驗），輸出至 results/ablation/ablation_summary.txt')
     parser.add_argument('--list', action='store_true',
                         help='列出所有可用的消融變體')
     parser.add_argument('--auto-cleanup', action='store_true',
@@ -740,8 +747,8 @@ def main():
         list_ablations()
         return
 
-    # 只生成報告
-    if args.report_only:
+    # 只生成跨資料集總結報告
+    if args.summary_only:
         generate_ablation_summary_report()
         return
 

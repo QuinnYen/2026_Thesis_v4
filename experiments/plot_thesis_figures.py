@@ -75,7 +75,7 @@ def get_multiseed_data():
         # 讀取所有 HKGAN 實驗（多種子）
         ds_dir = results_dir / ds
         if ds_dir.exists():
-            exp_dirs = list(ds_dir.glob("*_improved_hkgan_*"))
+            exp_dirs = list(ds_dir.glob("*_hkgan*"))
             f1_scores = []
             auc_scores = []
             neu_f1_scores = []  # 中性類別 F1
@@ -590,7 +590,7 @@ def get_all_seed_f1_scores():
         # 讀取所有 HKGAN 實驗（多種子）
         ds_dir = results_dir / ds
         if ds_dir.exists():
-            exp_dirs = list(ds_dir.glob("*_improved_hkgan_*"))
+            exp_dirs = list(ds_dir.glob("*_hkgan*"))
             seeds_seen = set()
 
             for exp in exp_dirs:
