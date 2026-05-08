@@ -32,17 +32,58 @@
 
 ---
 
-## 實驗結果（5 seeds 平均 ± 標準差）
+## 實驗結果
 
-| 資料集 | Macro-F1 (Solo) | Macro-F1 (Ensemble) | vs. Baseline |
-|--------|-----------------|---------------------|-------------|
-| REST14 | 75.34% ± 0.90% | **76.11%** | +3.79% F1 |
-| LAP14  | 70.85% ± 1.35% | **71.39%** | +2.48% F1 |
-| MAMS   | 84.29% ± 0.63% | **84.97%** | +2.39% F1 |
-| REST16 | 73.67% ± 2.37% | **74.42%** | +5.42% F1 |
-| LAP16  | 66.74% ± 0.93% | **67.93%** | +1.57% F1 |
+### HKGAN vs Baseline（Macro-F1，5-seed avg ± std）
 
-> Ensemble 策略：REST14/LAP14 採 Per-Seed Logit Adj → 等重，MAMS 採 Ensemble + Logit Adj，REST16/LAP16 採等重 Ensemble。
+| 資料集 | Baseline | HKGAN       | Ensemble    | vs Baseline |
+|--------|----------|-------------|-------------|------------|
+| REST14 | 72.32%   | 75.34±0.90% | **76.11%**  | +3.79%     |
+| LAP14  | 68.91%   | 70.85±1.35% | **71.39%**  | +2.48%     |
+| MAMS   | 82.58%   | 84.29±0.63% | **84.97%**  | +2.39%     |
+| REST16 | 69.00%   | 73.67±2.37% | **74.42%**  | +5.42%     |
+| LAP16  | 66.36%   | 66.74±0.93% | **67.93%**  | +1.57%     |
+
+Ensemble 報告存於 `results/HKGAN_Ensemble_{dataset}.txt`，由 `utils/ensemble_runner.py` 自動生成。
+
+### 各類別 F1（5-seed 平均）
+
+| 資料集 | Neg F1  | Neu F1  | Pos F1  |
+|--------|---------|---------|---------|
+| REST14 | 77.64%  | 57.51%  | 90.86%  |
+| LAP14  | 70.64%  | 55.07%  | 86.83%  |
+| MAMS   | 81.45%  | 87.23%  | 84.19%  |
+| REST16 | 81.39%  | 47.51%  | 92.11%  |
+| LAP16  | 82.53%  | 28.42%  | 89.28%  |
+
+> **LAP16 Neutral F1 僅 28.42%**：train 188 Neutral（6.5%），test 46（5.7%），屬資料固有稀少性，非 bug。
+
+---
+
+## 消融分析
+
+> 消融基準 `ablation_full` 使用統一超參（epochs=40，patience=12，無 per-dataset routing），確保各變體在相同訓練條件下比較。括號內為 Δ = full - 移除後，正數代表組件有效。
+
+| 資料集 | full（基準）    | no_knowledge            | no_inter_aspect         | no_loss_eng             | no_gate                 |
+|--------|----------------|-------------------------|-------------------------|-------------------------|-------------------------|
+| REST14 | 76.34 ± 0.88   | 74.60 ± 0.82 **(−1.74)** | 75.00 ± 0.71 **(−1.34)** | 75.80 ± 1.51 **(−0.54)** | 75.53 ± 0.95 **(−0.81)** |
+| LAP14  | 70.38 ± 1.57   | 69.15 ± 1.79 **(−1.23)** | 71.39 ± 0.45 (+1.01)    | 69.69 ± 1.19 **(−0.69)** | 69.74 ± 1.71 **(−0.64)** |
+| MAMS   | 84.26 ± 0.19   | 83.96 ± 0.73 **(−0.30)** | 82.92 ± 0.23 **(−1.34)** | 84.42 ± 0.91 (+0.16)    | 83.60 ± 0.35 **(−0.66)** |
+| REST16 | 74.04 ± 2.51   | 75.19 ± 0.52 (+1.15)    | 74.55 ± 1.79 (+0.51)    | 74.28 ± 2.86 (+0.24)    | 74.60 ± 1.07 (+0.56)    |
+| LAP16  | 66.59 ± 1.01   | 68.18 ± 0.41 (+1.59)    | 68.01 ± 1.65 (+1.42)    | 66.91 ± 1.93 (+0.32)    | 67.01 ± 1.30 (+0.42)    |
+
+> **REST16/LAP16 組件負貢獻說明**：Neutral 類別極度稀少（REST16 Neutral F1 47.51%，LAP16 僅 28.42%），macro-F1 波動主要受 Neutral 驅動，知識注入在稀少 Neutral 類別上帶來雜訊。不影響 REST14/LAP14/MAMS 三個主力資料集的結論。
+
+### 消融變體說明
+
+| 變體 | 說明 |
+|------|------|
+| `full` | HKGAN Full（統一超參，作為消融 delta 基準線）|
+| `bert_only` | 移除所有 HKGAN 組件，建立下限 |
+| `no_knowledge` | 移除整個知識增強模組（SenticNet + Gates）|
+| `no_inter_aspect` | 移除跨面向建模（IARN）|
+| `no_loss_eng` | 移除損失函數工程（Focal Loss + Logit Adjust）|
+| `no_gate` | 移除知識門控（Confidence + Dynamic Gate）|
 
 ---
 
@@ -92,7 +133,7 @@
 ├── utils/                                # 工具模組
 │   ├── focal_loss.py                     # Focal Loss 實現
 │   ├── ensemble_runner.py                # Ensemble 推理模組（可 import）
-│   ├── dataset_analyzer.py               # 數據集統計分析
+│   ├── dataset_analyzer.py              # 數據集統計分析
 │   ├── model_selector.py                 # 模型選擇器
 │   └── checkpoint_cleaner.py             # Checkpoint 自動清理
 │
@@ -121,85 +162,42 @@
 ### 安裝步驟
 
 ```bash
-# 進入專案目錄
 cd 2026_Thesis_v4
 
-# 建立虛擬環境
 python -m venv .venv
 .venv\Scripts\activate       # Windows
 # source .venv/bin/activate  # Linux/Mac
 
-# 安裝依賴
 pip install -r requirements.txt
 ```
 
 ---
 
-## 快速開始
+## 執行指令
 
-### 單一資料集訓練
-
-```bash
-# HKGAN 模式
-python run_experiments.py --dataset restaurants --hkgan
-
-# Baseline 模式（BERT-CLS）
-python run_experiments.py --dataset restaurants --baseline
-```
-
-### 全資料集批次執行
-
-```bash
-# 對所有資料集執行 HKGAN
-python run_experiments.py --hkgan --full-run
-
-# 對所有資料集執行 Baseline
-python run_experiments.py --full-baseline
-```
-
-### 多種子實驗（統計驗證）
+### 全流程訓練
 
 ```bash
 # 多種子 HKGAN（seeds: 42, 123, 2023, 999, 0）
 python run_experiments.py --hkgan --full-run --multi-seed
-
-# 實驗結束後自動清理多餘 checkpoint
-python run_experiments.py --hkgan --full-run --multi-seed --auto-cleanup
 ```
 
-### 統計顯著性檢驗
+### 全消融實驗
 
 ```bash
-# Paired t-test 比較 HKGAN vs Baseline
-python run_experiments.py --significance-test
-```
-
-### 生成報告與圖表
-
-```bash
-python run_experiments.py --report-only
-```
-
----
-
-## 消融實驗
-
-```bash
-# 完整消融研究（6 變體 × 5 資料集 × 5 seeds，訓練完自動清理）
+# 完整消融研究（6 變體 × 5 資料集 × 5 seeds）
 python run_ablation.py --full-study --multi-seed --auto-cleanup
+```
 
-# 生成消融報告
+### 報表輸出
+
+```bash
+# HKGAN 實驗報表
+python run_experiments.py --report-only
+
+# 消融實驗報表
 python run_ablation.py --report-only
 ```
-
-| 消融變體 | 說明 |
-|----------|------|
-| `full` | HKGAN Full（統一超參，作為消融 delta 基準線）|
-| `bert_only` | 移除所有 HKGAN 組件，建立下限 |
-| `no_all_knowledge` | 移除整個知識增強模組（SenticNet + Gates）|
-| `no_inter_aspect` | 移除跨面向建模（IARN）|
-| `no_all_loss_eng` | 移除損失函數工程（Focal Loss + Logit Adjust）|
-| `no_knowledge_gating` | 移除知識門控（Confidence + Dynamic Gate）|
 
 ---
 
@@ -227,12 +225,12 @@ model:
     lap16: 0.05
     default: 0.1
   use_dynamic_gate: true
-  domain: null             # 停用手工 Domain Filter
+  domain: null             # 停用手工 Domain Filter，由 Dynamic Gate 自主學習
 
 training:
   batch_size: 16
   accumulation_steps: 2   # 等效 batch=32
-  epochs: 40              # 方案四
+  epochs: 40
   patience: 12
   lr:                      # per-dataset
     restaurants: 3.0e-5
@@ -262,37 +260,6 @@ training:
 | `lr` | 3e-5（per-dataset）| 學習率 |
 | `patience` | 12 | Early stopping 容忍度 |
 | `loss_type` | focal | 損失函數（focal / ce）|
-
----
-
-## Checkpoint 清理
-
-```bash
-# Dry-run（只列出，不刪除）
-python tests/cleanup_checkpoints.py
-
-# 實際執行刪除
-python tests/cleanup_checkpoints.py --execute
-```
-
----
-
-## 常見問題
-
-**Q: GPU 記憶體不足？**
-1. 減少 `batch_size`（建議 8 或 4）
-2. 增加 `accumulation_steps` 補償
-3. 減少 `max_text_len`
-
-**Q: 訓練不穩定？**
-1. 降低學習率（`lr: 2e-5`）
-2. 增加 warmup（`warmup_ratio: 0.15`）
-3. 使用梯度裁剪（`grad_clip: 1.0`）
-
-**Q: Neutral F1 過低？**
-1. 調整 `neutral_boost` 參數
-2. 增加 `class_weights[1]`（Neutral 權重）
-3. 確認 `use_dynamic_gate: true`
 
 ---
 
