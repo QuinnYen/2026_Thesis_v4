@@ -636,7 +636,6 @@ class HKGAN(nn.Module):
         num_classes: 分類類別數
         dropout: Dropout 比率
         num_gat_heads: GAT 頭數
-        num_gat_layers: GAT 層數（保留參數，架構固定為 3 級）
         knowledge_weight: 知識注入基準權重
         use_senticnet: 是否使用 SenticNet
         use_confidence_gate: 是否使用信心門控
@@ -659,7 +658,6 @@ class HKGAN(nn.Module):
         num_classes: int = 3,
         dropout: float = 0.3,
         num_gat_heads: int = 4,
-        num_gat_layers: int = 2,
         knowledge_weight: float = 0.1,
         use_senticnet: bool = True,
         use_confidence_gate: bool = True,
@@ -1082,7 +1080,6 @@ def create_hkgan_model(args, num_classes: int = 3) -> HKGAN:
         num_classes=num_classes,
         dropout=getattr(args, 'dropout', 0.3),
         num_gat_heads=getattr(args, 'gat_heads', 4),
-        num_gat_layers=getattr(args, 'gat_layers', 2),
         knowledge_weight=getattr(args, 'knowledge_weight', 0.1),
         use_senticnet=getattr(args, 'use_senticnet', True),
         use_confidence_gate=getattr(args, 'use_confidence_gate', True),

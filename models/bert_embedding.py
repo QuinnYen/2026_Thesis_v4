@@ -35,7 +35,7 @@ class BERTEmbedding(nn.Module):
         model_name: str = 'bert-base-uncased',
         freeze: bool = False,
         pooling: str = 'mean',
-        output_hidden_states: bool = False  # 新增：是否輸出所有層的hidden states
+        output_hidden_states: bool = False
     ):
         """
         初始化 BERT 嵌入層
@@ -52,12 +52,10 @@ class BERTEmbedding(nn.Module):
         self.pooling = pooling
         self.output_hidden_states = output_hidden_states
 
-        # 檢測模型類型
         model_name_lower = model_name.lower()
         self.is_deberta = 'deberta' in model_name_lower
         self.is_deberta_v2 = 'deberta-v2' in model_name_lower or 'deberta-v3' in model_name_lower
 
-        # 載入模型和分詞器
         print(f"載入模型: {model_name}")
         if self.is_deberta_v2:
             self.bert = DebertaV2Model.from_pretrained(model_name)
@@ -72,36 +70,28 @@ class BERTEmbedding(nn.Module):
             self.tokenizer = BertTokenizer.from_pretrained(model_name)
             print("  類型: BERT")
 
-        # 如果需要輸出多層hidden states，設置配置
         if output_hidden_states:
             self.bert.config.output_hidden_states = True
             print("  階層模式: 啟用多層特徵提取")
 
-        # 獲取隱藏層大小
         self.hidden_size = self.bert.config.hidden_size
         print(f"  隱藏層維度: {self.hidden_size}")
 
-        # 凍結參數策略
         if freeze:
-            # 獲取總層數（BERT 和 DeBERTa 都有 12 層）
             num_layers = self.bert.config.num_hidden_layers
-            last_layers = 2  # 訓練最後 2 層
+            last_layers = 2
 
-            # 凍結除了最後幾層的所有層
             for name, param in self.bert.named_parameters():
                 param.requires_grad = False
 
-                # 訓練最後幾層
                 for layer_idx in range(num_layers - last_layers, num_layers):
                     if f"layer.{layer_idx}" in name:
                         param.requires_grad = True
 
-                # BERT 的 pooler（DeBERTa 沒有）
                 if not self.is_deberta and not self.is_deberta_v2:
                     if "pooler" in name:
                         param.requires_grad = True
 
-            # 計算可訓練參數數量
             trainable_params = sum(p.numel() for p in self.bert.parameters() if p.requires_grad)
             total_params = sum(p.numel() for p in self.bert.parameters())
             print(f"  部分凍結: 可訓練參數 {trainable_params:,} / 總參數 {total_params:,}")
@@ -135,10 +125,8 @@ class BERTEmbedding(nn.Module):
             return_dict=True
         )
 
-        # 獲取序列輸出 [batch, seq_len, hidden_size]
         sequence_output = outputs.last_hidden_state
 
-        # 如果需要返回所有層的hidden states（用於階層模型）
         if self.output_hidden_states:
             all_hidden_states = outputs.hidden_states  # tuple of (num_layers+1) tensors
             return sequence_output, all_hidden_states
@@ -162,7 +150,6 @@ class BERTEmbedding(nn.Module):
         返回:
             (input_ids, attention_mask)
         """
-        # 分詞
         encoded = self.tokenizer.batch_encode_plus(
             texts,
             padding='max_length',
@@ -192,13 +179,10 @@ class BERTEmbedding(nn.Module):
             池化後的嵌入 [batch, hidden_size]
         """
         if self.pooling == 'cls':
-            # 使用 [CLS] token
             return sequence_output[:, 0, :]
 
         elif self.pooling == 'mean':
-            # 平均池化（考慮掩碼）
             if attention_mask is not None:
-                # 擴展掩碼維度
                 mask_expanded = attention_mask.unsqueeze(-1).expand(sequence_output.size()).float()
                 sum_embeddings = torch.sum(sequence_output * mask_expanded, dim=1)
                 sum_mask = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
@@ -207,102 +191,10 @@ class BERTEmbedding(nn.Module):
                 return torch.mean(sequence_output, dim=1)
 
         elif self.pooling == 'max':
-            # 最大池化
             return torch.max(sequence_output, dim=1)[0]
 
         else:
             raise ValueError(f"不支援的池化方式: {self.pooling}")
-
-
-class HybridEmbedding(nn.Module):
-    """
-    混合嵌入層
-    結合 BERT 和傳統詞嵌入的優勢
-    """
-
-    def __init__(
-        self,
-        bert_model_name: str = 'bert-base-uncased',
-        vocab_size: int = 10000,
-        static_embedding_dim: int = 300,
-        freeze_bert: bool = False,
-        use_static: bool = True
-    ):
-        """
-        初始化混合嵌入層
-
-        參數:
-            bert_model_name: BERT 模型名稱
-            vocab_size: 靜態詞彙表大小
-            static_embedding_dim: 靜態嵌入維度
-            freeze_bert: 是否凍結 BERT
-            use_static: 是否使用靜態嵌入
-        """
-        super(HybridEmbedding, self).__init__()
-
-        # BERT 嵌入
-        self.bert_embedding = BERTEmbedding(
-            model_name=bert_model_name,
-            freeze=freeze_bert
-        )
-
-        self.use_static = use_static
-
-        # 靜態嵌入（可選）
-        if use_static:
-            self.static_embedding = nn.Embedding(
-                vocab_size,
-                static_embedding_dim,
-                padding_idx=0
-            )
-
-            # 投影層（將靜態嵌入投影到 BERT 維度）
-            self.static_projection = nn.Linear(
-                static_embedding_dim,
-                self.bert_embedding.hidden_size
-            )
-
-        # 融合層
-        if use_static:
-            self.fusion = nn.Linear(
-                self.bert_embedding.hidden_size * 2,
-                self.bert_embedding.hidden_size
-            )
-
-        self.hidden_size = self.bert_embedding.hidden_size
-
-    def forward(
-        self,
-        bert_input_ids: torch.Tensor,
-        bert_attention_mask: torch.Tensor,
-        static_input_ids: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        """
-        前向傳播
-
-        參數:
-            bert_input_ids: BERT token IDs [batch, seq_len]
-            bert_attention_mask: BERT 注意力掩碼 [batch, seq_len]
-            static_input_ids: 靜態詞嵌入索引 [batch, seq_len]
-
-        返回:
-            融合的嵌入 [batch, seq_len, hidden_size]
-        """
-        # BERT 嵌入
-        bert_emb = self.bert_embedding(bert_input_ids, bert_attention_mask)
-
-        if not self.use_static or static_input_ids is None:
-            return bert_emb
-
-        # 靜態嵌入
-        static_emb = self.static_embedding(static_input_ids)
-        static_emb_proj = self.static_projection(static_emb)
-
-        # 融合
-        combined = torch.cat([bert_emb, static_emb_proj], dim=-1)
-        fused_emb = self.fusion(combined)
-
-        return fused_emb
 
 
 class BERTForABSA(nn.Module):
@@ -352,13 +244,8 @@ class BERTForABSA(nn.Module):
             (句子嵌入 [batch, text_len, hidden_size],
              面向嵌入 [batch, aspect_len, hidden_size])
         """
-        # 編碼句子
         text_emb = self.bert_embedding(text_input_ids, text_attention_mask)
-
-        # 編碼面向
         aspect_emb = self.bert_embedding(aspect_input_ids, aspect_attention_mask)
-
-        # 池化面向嵌入得到面向表示
         aspect_pooled = self.bert_embedding.get_pooled_embedding(
             aspect_emb, aspect_attention_mask
         )
@@ -366,50 +253,3 @@ class BERTForABSA(nn.Module):
         return text_emb, aspect_pooled
 
 
-if __name__ == "__main__":
-    # 測試 BERT 嵌入
-    print("測試 BERT 嵌入層...")
-
-    # 創建 BERT 嵌入層
-    bert_emb = BERTEmbedding(
-        model_name='bert-base-uncased',
-        freeze=False
-    )
-
-    print(f"\nBERT 隱藏層大小: {bert_emb.hidden_size}")
-
-    # 測試文本編碼
-    texts = [
-        "The food was great but the service was terrible.",
-        "I love this restaurant!"
-    ]
-
-    input_ids, attention_mask = bert_emb.encode_text(texts, max_length=20)
-
-    print(f"\nInput IDs 形狀: {input_ids.shape}")
-    print(f"Attention Mask 形狀: {attention_mask.shape}")
-
-    # 前向傳播
-    embeddings = bert_emb(input_ids, attention_mask)
-    print(f"BERT 嵌入形狀: {embeddings.shape}")
-
-    # 池化
-    pooled = bert_emb.get_pooled_embedding(embeddings, attention_mask)
-    print(f"池化後形狀: {pooled.shape}")
-
-    # 測試 BERT for ABSA
-    print("\n\n測試 BERT for ABSA...")
-    bert_absa = BERTForABSA(freeze_bert=False)
-
-    aspect_texts = ["food", "service"]
-    aspect_ids, aspect_mask = bert_emb.encode_text(aspect_texts, max_length=10)
-
-    text_emb, aspect_emb = bert_absa(
-        input_ids, attention_mask,
-        aspect_ids, aspect_mask
-    )
-
-    print(f"句子嵌入形狀: {text_emb.shape}")
-    print(f"面向嵌入形狀: {aspect_emb.shape}")
-
-    print("\nBERT 嵌入層測試完成！")

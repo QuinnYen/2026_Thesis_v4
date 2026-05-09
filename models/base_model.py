@@ -6,8 +6,7 @@
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Tuple
-import numpy as np
+from typing import Dict
 
 
 class BaseModel(ABC, nn.Module):
@@ -113,7 +112,6 @@ class BaseModel(ABC, nn.Module):
             self.load_state_dict(checkpoint['model_state_dict'], strict=strict)
             print(f"模型已從 {load_path} 載入")
         else:
-            # 如果直接是 state_dict
             self.load_state_dict(checkpoint, strict=strict)
             print(f"模型權重已從 {load_path} 載入")
 
@@ -159,245 +157,14 @@ class BaseModel(ABC, nn.Module):
         print(f"模型: {self.__class__.__name__}")
         print("=" * 60)
 
-        # 參數資訊
         params_info = self.get_parameters_info()
         print(f"總參數量:     {params_info['total']:,}")
         print(f"可訓練參數:   {params_info['trainable']:,}")
         print(f"凍結參數:     {params_info['non_trainable']:,}")
 
-        # 設備資訊
         device = self.get_device()
         print(f"當前設備:     {device}")
 
         print("=" * 60 + "\n")
 
 
-class EmbeddingLayer(nn.Module):
-    """
-    詞嵌入層
-
-    功能:
-        - 支援預訓練嵌入（GloVe, BERT 等）
-        - 支援隨機初始化
-        - 支援嵌入微調控制
-    """
-
-    def __init__(
-        self,
-        vocab_size: int,
-        embedding_dim: int,
-        pretrained_embeddings: Optional[np.ndarray] = None,
-        freeze: bool = False,
-        padding_idx: int = 0
-    ):
-        """
-        初始化嵌入層
-
-        參數:
-            vocab_size: 詞彙表大小
-            embedding_dim: 嵌入維度
-            pretrained_embeddings: 預訓練嵌入矩陣 [vocab_size, embedding_dim]
-            freeze: 是否凍結嵌入層
-            padding_idx: 填充索引
-        """
-        super(EmbeddingLayer, self).__init__()
-
-        self.embedding = nn.Embedding(
-            vocab_size,
-            embedding_dim,
-            padding_idx=padding_idx
-        )
-
-        # 載入預訓練嵌入
-        if pretrained_embeddings is not None:
-            self._load_pretrained_embeddings(pretrained_embeddings)
-
-        # 凍結嵌入層
-        if freeze:
-            self.embedding.weight.requires_grad = False
-
-    def _load_pretrained_embeddings(self, embeddings: np.ndarray):
-        """
-        載入預訓練嵌入
-
-        參數:
-            embeddings: 嵌入矩陣
-        """
-        embeddings_tensor = torch.from_numpy(embeddings).float()
-        self.embedding.weight.data.copy_(embeddings_tensor)
-        print(f"已載入預訓練嵌入: {embeddings.shape}")
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        前向傳播
-
-        參數:
-            x: 輸入索引 [batch, seq_len]
-
-        返回:
-            嵌入向量 [batch, seq_len, embedding_dim]
-        """
-        return self.embedding(x)
-
-
-class AttentionPooling(nn.Module):
-    """
-    注意力池化層
-    用於將變長序列池化為固定維度向量
-    """
-
-    def __init__(self, hidden_dim: int):
-        """
-        初始化注意力池化
-
-        參數:
-            hidden_dim: 隱藏層維度
-        """
-        super(AttentionPooling, self).__init__()
-
-        self.attention = nn.Linear(hidden_dim, 1)
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        mask: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        前向傳播
-
-        參數:
-            hidden_states: 隱藏狀態 [batch, seq_len, hidden_dim]
-            mask: 掩碼 [batch, seq_len] (1 表示有效，0 表示填充)
-
-        返回:
-            (池化向量 [batch, hidden_dim], 注意力權重 [batch, seq_len])
-        """
-        # 計算注意力分數 [batch, seq_len, 1]
-        attention_scores = self.attention(hidden_states)
-
-        # 應用掩碼
-        if mask is not None:
-            attention_scores = attention_scores.masked_fill(mask.unsqueeze(-1) == 0, -1e9)
-
-        # 計算注意力權重 [batch, seq_len, 1]
-        attention_weights = torch.softmax(attention_scores, dim=1)
-
-        # 加權求和 [batch, hidden_dim]
-        pooled_output = torch.sum(hidden_states * attention_weights, dim=1)
-
-        return pooled_output, attention_weights.squeeze(-1)
-
-
-class MLP(nn.Module):
-    """
-    多層感知機（MLP）
-    用於分類或特徵轉換
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dims: list,
-        output_dim: int,
-        dropout: float = 0.5,
-        activation: str = 'relu',
-        use_batch_norm: bool = False
-    ):
-        """
-        初始化 MLP
-
-        參數:
-            input_dim: 輸入維度
-            hidden_dims: 隱藏層維度列表
-            output_dim: 輸出維度
-            dropout: Dropout 比率
-            activation: 激活函數 ('relu', 'tanh', 'gelu')
-            use_batch_norm: 是否使用批次正規化
-        """
-        super(MLP, self).__init__()
-
-        # 選擇激活函數
-        if activation == 'relu':
-            self.activation = nn.ReLU()
-        elif activation == 'tanh':
-            self.activation = nn.Tanh()
-        elif activation == 'gelu':
-            self.activation = nn.GELU()
-        else:
-            raise ValueError(f"不支援的激活函數: {activation}")
-
-        # 構建層
-        layers = []
-        dims = [input_dim] + hidden_dims + [output_dim]
-
-        for i in range(len(dims) - 1):
-            # 線性層
-            layers.append(nn.Linear(dims[i], dims[i + 1]))
-
-            # 最後一層不加激活函數和 dropout
-            if i < len(dims) - 2:
-                # 批次正規化
-                if use_batch_norm:
-                    layers.append(nn.BatchNorm1d(dims[i + 1]))
-
-                # 激活函數
-                layers.append(self.activation)
-
-                # Dropout
-                if dropout > 0:
-                    layers.append(nn.Dropout(dropout))
-
-        self.mlp = nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        前向傳播
-
-        參數:
-            x: 輸入張量 [batch, input_dim]
-
-        返回:
-            輸出張量 [batch, output_dim]
-        """
-        return self.mlp(x)
-
-
-if __name__ == "__main__":
-    # 測試基礎模型組件
-    print("測試基礎模型組件...")
-
-    # 測試嵌入層
-    print("\n1. 測試嵌入層")
-    embedding_layer = EmbeddingLayer(
-        vocab_size=1000,
-        embedding_dim=300,
-        freeze=False
-    )
-
-    test_input = torch.randint(0, 1000, (4, 10))  # [batch=4, seq_len=10]
-    embeddings = embedding_layer(test_input)
-    print(f"嵌入輸出形狀: {embeddings.shape}")  # 應為 [4, 10, 300]
-
-    # 測試注意力池化
-    print("\n2. 測試注意力池化")
-    pooling = AttentionPooling(hidden_dim=256)
-
-    hidden_states = torch.randn(4, 10, 256)  # [batch, seq_len, hidden_dim]
-    pooled, weights = pooling(hidden_states)
-    print(f"池化輸出形狀: {pooled.shape}")  # 應為 [4, 256]
-    print(f"注意力權重形狀: {weights.shape}")  # 應為 [4, 10]
-
-    # 測試 MLP
-    print("\n3. 測試 MLP")
-    mlp = MLP(
-        input_dim=256,
-        hidden_dims=[128, 64],
-        output_dim=3,
-        dropout=0.5,
-        use_batch_norm=True
-    )
-
-    output = mlp(pooled)
-    print(f"MLP 輸出形狀: {output.shape}")  # 應為 [4, 3]
-
-    print("\n基礎模型組件測試完成！")
