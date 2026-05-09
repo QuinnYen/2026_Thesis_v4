@@ -30,6 +30,24 @@ def load_config(config_path):
     return config
 
 
+def resolve_dataset_value(value, dataset, default=None):
+    """若 value 是 dict，依 dataset 鍵解析；否則原值返回。"""
+    if not isinstance(value, dict):
+        return value
+    if dataset and dataset in value:
+        return value[dataset]
+    return value.get('default', default)
+
+
+def append_boolean_flag(args, cfg, key, true_flag, false_flag=None):
+    """依 cfg[key] 的 bool 值 append --true_flag 或 --false_flag。"""
+    if key in cfg:
+        if cfg[key]:
+            args.append(f'--{true_flag}')
+        else:
+            args.append(false_flag if false_flag else f'--no_{true_flag}')
+
+
 def config_to_args(config, dataset=None):
     """
     將 YAML 配置轉換為命令行參數
@@ -62,10 +80,7 @@ def config_to_args(config, dataset=None):
             bert_model = model_cfg['bert_model']
             # 支援對應表格式：根據 dataset 選擇對應的模型
             if isinstance(bert_model, dict):
-                if dataset and dataset in bert_model:
-                    bert_model = bert_model[dataset]
-                else:
-                    bert_model = bert_model.get('default', 'bert-base-uncased')
+                bert_model = resolve_dataset_value(bert_model, dataset, 'bert-base-uncased')
                 print(f"[Config] 根據資料集 '{dataset}' 選擇 bert_model: {bert_model}")
             args.extend(['--bert_model', bert_model])
 
@@ -101,9 +116,6 @@ def config_to_args(config, dataset=None):
             if 'iarm_heads' in model_cfg:
                 args.extend(['--iarm_heads', str(model_cfg['iarm_heads'])])
 
-            if 'iarm_layers' in model_cfg:
-                args.extend(['--iarm_layers', str(model_cfg['iarm_layers'])])
-
         # Attention 參數
         if 'num_attention_heads' in model_cfg:
             args.extend(['--num_attention_heads', str(model_cfg['num_attention_heads'])])
@@ -118,46 +130,27 @@ def config_to_args(config, dataset=None):
         if 'knowledge_weight' in model_cfg:
             kw = model_cfg['knowledge_weight']
             if isinstance(kw, dict):
-                kw = kw.get(dataset, kw.get('default', 0.1)) if dataset else kw.get('default', 0.1)
+                kw = resolve_dataset_value(kw, dataset, 0.1)
                 print(f"[Config] 根據資料集 '{dataset}' 選擇 knowledge_weight: {kw}")
             args.extend(['--knowledge_weight', str(kw)])
 
         if 'gate_reg_weight' in model_cfg:
             args.extend(['--gate_reg_weight', str(model_cfg['gate_reg_weight'])])
 
-        if 'use_senticnet' in model_cfg:
-            if model_cfg['use_senticnet']:
-                args.append('--use_senticnet')
-            else:
-                args.append('--no_senticnet')
+        # --no_senticnet 為非對稱（無 use_ 前綴），需明確指定
+        append_boolean_flag(args, model_cfg, 'use_senticnet', 'use_senticnet', '--no_senticnet')
 
         # HKGAN v2.0 新增：Neutral 識別改進
-        if 'use_confidence_gate' in model_cfg:
-            if model_cfg['use_confidence_gate']:
-                args.append('--use_confidence_gate')
-            else:
-                args.append('--no_confidence_gate')
+        append_boolean_flag(args, model_cfg, 'use_confidence_gate', 'use_confidence_gate')
 
         # HKGAN v3.0 新增：動態知識門控
-        if 'use_dynamic_gate' in model_cfg:
-            if model_cfg['use_dynamic_gate']:
-                args.append('--use_dynamic_gate')
-            else:
-                args.append('--no_dynamic_gate')
+        append_boolean_flag(args, model_cfg, 'use_dynamic_gate', 'use_dynamic_gate')
 
         # 消融實驗用：Inter-Aspect 模組
-        if 'use_inter_aspect' in model_cfg:
-            if model_cfg['use_inter_aspect']:
-                args.append('--use_inter_aspect')
-            else:
-                args.append('--no_inter_aspect')
+        append_boolean_flag(args, model_cfg, 'use_inter_aspect', 'use_inter_aspect')
 
         # 消融實驗用：階層式特徵
-        if 'use_hierarchical_features' in model_cfg:
-            if model_cfg['use_hierarchical_features']:
-                args.append('--use_hierarchical_features')
-            else:
-                args.append('--no_hierarchical_features')
+        append_boolean_flag(args, model_cfg, 'use_hierarchical_features', 'use_hierarchical_features')
 
         if 'domain' in model_cfg and model_cfg['domain']:
             args.extend(['--domain', model_cfg['domain']])
@@ -182,12 +175,8 @@ def config_to_args(config, dataset=None):
         if 'max_aspects' in data_cfg:
             args.extend(['--max_aspects', str(data_cfg['max_aspects'])])
 
-        # include_single_aspect 需要明確處理 True/False
-        if 'include_single_aspect' in data_cfg:
-            if data_cfg['include_single_aspect']:
-                args.append('--include_single_aspect')
-            else:
-                args.append('--no_include_single_aspect')  # 明確禁用
+        # include_single_aspect 需要明確處理 True/False（消融實驗用）
+        append_boolean_flag(args, data_cfg, 'include_single_aspect', 'include_single_aspect')
 
         if 'virtual_aspect_mode' in data_cfg:
             args.extend(['--virtual_aspect_mode', data_cfg['virtual_aspect_mode']])
@@ -214,7 +203,7 @@ def config_to_args(config, dataset=None):
         if 'lr' in train_cfg:
             lr = train_cfg['lr']
             if isinstance(lr, dict):
-                lr = lr.get(dataset, lr.get('default', 3e-5)) if dataset else lr.get('default', 3e-5)
+                lr = resolve_dataset_value(lr, dataset, 3e-5)
                 print(f"[Config] 根據資料集 '{dataset}' 選擇 lr: {lr}")
             args.extend(['--lr', str(lr)])
 
@@ -240,7 +229,7 @@ def config_to_args(config, dataset=None):
         if 'focal_gamma' in train_cfg:
             fg = train_cfg['focal_gamma']
             if isinstance(fg, dict):
-                fg = fg.get(dataset, fg.get('default', 2.0)) if dataset else fg.get('default', 2.0)
+                fg = resolve_dataset_value(fg, dataset, 2.0)
                 print(f"[Config] 根據資料集 '{dataset}' 選擇 focal_gamma: {fg}")
             args.extend(['--focal_gamma', str(fg)])
 
@@ -250,7 +239,7 @@ def config_to_args(config, dataset=None):
         if 'class_weights' in train_cfg:
             cw = train_cfg['class_weights']
             if isinstance(cw, dict):
-                cw = cw.get(dataset, cw.get('default', [0.8, 1.8, 0.8])) if dataset else cw.get('default', [0.8, 1.8, 0.8])
+                cw = resolve_dataset_value(cw, dataset, [0.8, 1.8, 0.8])
                 print(f"[Config] 根據資料集 '{dataset}' 選擇 class_weights: {cw}")
             if cw == 'auto':
                 # 動態計算 class weights
@@ -274,7 +263,7 @@ def config_to_args(config, dataset=None):
         if 'llrd_decay' in train_cfg:
             decay = train_cfg['llrd_decay']
             if isinstance(decay, dict):
-                decay = decay.get(dataset, decay.get('default', 0.95)) if dataset else decay.get('default', 0.95)
+                decay = resolve_dataset_value(decay, dataset, 0.95)
                 print(f"[Config] 根據資料集 '{dataset}' 選擇 llrd_decay: {decay}")
             args.extend(['--llrd_decay', str(decay)])
 
@@ -283,30 +272,21 @@ def config_to_args(config, dataset=None):
         if 'neutral_boost' in train_cfg:
             neutral_boost = train_cfg['neutral_boost']
             if isinstance(neutral_boost, dict):
-                if dataset and dataset in neutral_boost:
-                    neutral_boost = neutral_boost[dataset]
-                else:
-                    neutral_boost = neutral_boost.get('default', 0.0)
+                neutral_boost = resolve_dataset_value(neutral_boost, dataset, 0.0)
                 print(f"[Config] 根據資料集 '{dataset}' 選擇 neutral_boost: {neutral_boost}")
             args.extend(['--neutral_boost', str(neutral_boost)])
 
         if 'neg_suppress' in train_cfg:
             neg_suppress = train_cfg['neg_suppress']
             if isinstance(neg_suppress, dict):
-                if dataset and dataset in neg_suppress:
-                    neg_suppress = neg_suppress[dataset]
-                else:
-                    neg_suppress = neg_suppress.get('default', 0.0)
+                neg_suppress = resolve_dataset_value(neg_suppress, dataset, 0.0)
                 print(f"[Config] 根據資料集 '{dataset}' 選擇 neg_suppress: {neg_suppress}")
             args.extend(['--neg_suppress', str(neg_suppress)])
 
         if 'pos_suppress' in train_cfg:
             pos_suppress = train_cfg['pos_suppress']
             if isinstance(pos_suppress, dict):
-                if dataset and dataset in pos_suppress:
-                    pos_suppress = pos_suppress[dataset]
-                else:
-                    pos_suppress = pos_suppress.get('default', 0.0)
+                pos_suppress = resolve_dataset_value(pos_suppress, dataset, 0.0)
                 print(f"[Config] 根據資料集 '{dataset}' 選擇 pos_suppress: {pos_suppress}")
             args.extend(['--pos_suppress', str(pos_suppress)])
 
@@ -321,11 +301,6 @@ def config_to_args(config, dataset=None):
     # 知識蒸餾配置
     if 'distillation' in config:
         distill_cfg = config['distillation']
-
-        if distill_cfg.get('enabled'):
-            # 啟用蒸餾時，loss_type 設為 distill
-            if '--loss_type' not in args:
-                args.extend(['--loss_type', 'distill'])
 
         if 'alpha' in distill_cfg:
             args.extend(['--distill_alpha', str(distill_cfg['alpha'])])
