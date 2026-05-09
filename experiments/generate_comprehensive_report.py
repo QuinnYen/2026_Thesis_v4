@@ -95,13 +95,13 @@ def read_metrics(exp_dir):
         'test_f1_pos': None,
         'val_f1': None,
         'best_epoch': None,
-        'total_epochs': None,  # 配置的總 epochs
-        'patience': None,  # early stopping patience
-        'class_weights': None,  # 類別權重
-        'focal_gamma': None,  # focal loss gamma
+        'total_epochs': None,
+        'patience': None,
+        'class_weights': None,
+        'focal_gamma': None,
         'timestamp': None,
         'exp_name': exp_dir.name,
-        'layer_attention': None  # HBL 特有
+        'layer_attention': None
     }
 
     # 從 experiment_config.json 讀取訓練配置
@@ -125,22 +125,18 @@ def read_metrics(exp_dir):
             with open(results_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-                # 讀取 test_metrics
                 test_metrics = data.get('test_metrics', {})
                 metrics['test_acc'] = test_metrics.get('accuracy')
                 metrics['test_f1'] = test_metrics.get('f1_macro')
 
-                # 讀取各類別的 F1 值
                 f1_per_class = test_metrics.get('f1_per_class', [])
                 if len(f1_per_class) >= 3:
                     metrics['test_f1_neg'] = f1_per_class[0]
                     metrics['test_f1_neu'] = f1_per_class[1]
                     metrics['test_f1_pos'] = f1_per_class[2]
 
-                # 讀取 validation F1
                 metrics['val_f1'] = data.get('best_val_f1')
 
-                # 讀取 best epoch
                 if 'best_val_f1' in data and 'history' in data:
                     val_f1_list = data['history'].get('val_f1_macro', [])
                     if val_f1_list:
@@ -150,11 +146,9 @@ def read_metrics(exp_dir):
                                 metrics['best_epoch'] = i + 1
                                 break
 
-                # 讀取 layer attention (HBL 特有)
                 if 'layer_attention' in data:
                     metrics['layer_attention'] = data['layer_attention']
 
-                # 讀取 VP-IARN 特有指標
                 if 'adaptive_alpha' in data:
                     metrics['adaptive_alpha'] = data['adaptive_alpha']
                 if 'multi_aspect_ratio' in data:
@@ -220,7 +214,6 @@ def generate_text_report(dataset, results):
         class_weights = first_valid.get('class_weights')
         focal_gamma = first_valid.get('focal_gamma', 'N/A')
     else:
-        # 使用預設值
         epochs, patience, focal_gamma = 30, 10, 2.0
         class_weights = None
 

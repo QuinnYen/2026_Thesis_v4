@@ -35,10 +35,9 @@ import numpy as np
 
 # 嘗試導入繪圖庫
 try:
-    import matplotlib.pyplot as plt
     import matplotlib
-    matplotlib.use('Agg')  # 非交互式後端
-    # 設定中文字體
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
     plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'SimHei', 'DejaVu Sans']
     plt.rcParams['axes.unicode_minus'] = False
     HAS_MATPLOTLIB = True
@@ -356,7 +355,6 @@ def generate_dataset_report(dataset, results, output_dir):
     report.append("")
     report.append("=" * 80)
 
-    # 保存報告（存到 results/ablation/{dataset}/ 下）
     report_text = "\n".join(report)
     dataset_dir = output_dir / dataset
     dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -383,7 +381,6 @@ def generate_figures(dataset, results, output_dir):
     if not results:
         return
 
-    # 圖表存到 results/ablation/{dataset}/figures/ 下
     figures_dir = output_dir / dataset / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -619,8 +616,6 @@ def generate_cross_dataset_report(all_results, output_dir):
     report.append("")
     report.append("=" * 100)
 
-    # 保存報告（綜合報告存到 results/ablation/ 根目錄）
-    # 文件名包含所有資料集名稱
     report_text = "\n".join(report)
     dataset_names = "_".join(sorted(all_results.keys()))
     output_file = output_dir / f"ablation_report_summary_{dataset_names}.txt"
@@ -642,7 +637,6 @@ def generate_heatmap(all_results, output_dir):
     if not HAS_MATPLOTLIB:
         return
 
-    # 熱力圖存到 results/ablation/figures/ 根目錄
     figures_dir = output_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
 

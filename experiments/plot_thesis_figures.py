@@ -30,6 +30,7 @@
 """
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import numpy as np
 import argparse
 import json
@@ -78,7 +79,7 @@ def get_multiseed_data():
             exp_dirs = list(ds_dir.glob("*_hkgan*"))
             f1_scores = []
             auc_scores = []
-            neu_f1_scores = []  # 中性類別 F1
+            neu_f1_scores = []
             seeds_seen = set()
 
             for exp in exp_dirs:
@@ -160,10 +161,8 @@ def get_multiseed_data():
 def plot_f1_comparison(output_path=None, show=True):
     """繪製 Macro-F1 對比圖（分組條形圖）"""
 
-    # 從實際實驗數據讀取
     exp_data = get_multiseed_data()
 
-    # 轉換格式
     datasets = []
     baseline_f1 = []
     hkgan_f1 = []
@@ -193,10 +192,7 @@ def plot_f1_comparison(output_path=None, show=True):
         print("錯誤: 沒有找到任何有效的實驗數據")
         return
 
-    # 計算改善幅度
     improvements = [h - b for h, b in zip(hkgan_f1, baseline_f1)]
-
-    # 按改善幅度排序（由高到低）
     sorted_indices = np.argsort(improvements)[::-1]
     datasets = [datasets[i] for i in sorted_indices]
     baseline_f1 = [baseline_f1[i] for i in sorted_indices]
@@ -722,8 +718,6 @@ def plot_f1_boxplot(output_path=None, show=True):
     ax.grid(True, axis='y', linestyle='--', alpha=0.5)
     ax.set_axisbelow(True)
 
-    # 添加圖例
-    from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='#4472C4', edgecolor='#2E5090', alpha=0.7, label='Baseline'),
         Patch(facecolor='#70AD47', edgecolor='#4A7A2E', alpha=0.7, label='HKGAN')
@@ -799,7 +793,7 @@ def get_predictions_data():
     data = {}
 
     for model_type in ['improved', 'baseline']:
-        base_dir = results_dir / model_type if model_type == 'improved' else results_dir / 'baseline'
+        base_dir = results_dir / model_type
 
         for ds in DATASETS_ORDER:
             ds_dir = base_dir / ds
@@ -1078,7 +1072,6 @@ def main():
                 output_path = Path(args.output) / "roc_curves.png"
             plot_roc_curves(output_path=output_path, show=show)
         else:
-            # 預設輸出到 results/figures/
             plot_roc_curves(output_path=Path("results/figures/roc_curves.png"), show=show)
 
     print("\n" + "=" * 60)

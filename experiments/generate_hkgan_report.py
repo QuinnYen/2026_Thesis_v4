@@ -168,14 +168,14 @@ def read_metrics(exp_dir):
         'test_f1_neg': None,
         'test_f1_neu': None,
         'test_f1_pos': None,
-        'test_auc_macro': None,      # 新增：AUC (Macro)
-        'test_auc_weighted': None,   # 新增：AUC (Weighted)
+        'test_auc_macro': None,
+        'test_auc_weighted': None,
         'val_f1': None,
         'best_epoch': None,
         'total_epochs': None,
         'exp_name': exp_dir.name,
         'timestamp': None,
-        'confusion_matrix': None  # 新增：混淆矩陣
+        'confusion_matrix': None
     }
 
     # 從 experiment_config.json 讀取訓練配置
@@ -189,7 +189,7 @@ def read_metrics(exp_dir):
                 metrics['lr'] = training_config.get('lr')
                 metrics['batch_size'] = training_config.get('batch_size')
                 metrics['focal_gamma'] = training_config.get('focal_gamma')
-        except Exception as e:
+        except Exception:
             pass
 
     # 從 experiment_results.json 讀取
@@ -449,7 +449,6 @@ def main():
     args = parser.parse_args()
 
     results_dir = Path("results")
-    reports_dir = Path("results")
 
     if args.all:
         datasets = ['restaurants', 'laptops', 'rest16', 'lap16', 'mams']
@@ -485,7 +484,7 @@ def main():
         print(report)
 
         # 保存報告
-        output_file = reports_dir / f"HKGAN報告_{display_name}.txt"
+        output_file = results_dir / f"HKGAN報告_{display_name}.txt"
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(report)
         print(f"\n報告已保存至: {output_file}")
