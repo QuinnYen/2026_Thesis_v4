@@ -110,8 +110,7 @@ class SenticNetKnowledge:
         polarity, is_known = senticnet.get_polarity_with_coverage("unknown_word")
     """
 
-    # 默認 SenticNet 路徑（SenticNet 7，格式與 SN5/6 相容）
-    DEFAULT_PATH = "data/SenticNet_7.0/senticnet.py"
+    DEFAULT_PATH = "data/SenticNet_5.0/senticnet.py"
 
     # 用於標記未登錄詞的特殊值（區分真正的中性 0.0）
     UNKNOWN_MARKER = float('nan')

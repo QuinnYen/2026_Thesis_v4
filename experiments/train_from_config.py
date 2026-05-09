@@ -346,12 +346,8 @@ def main():
 
     config = load_config(config_path)
 
-    # 依 yaml 的 knowledge_backend 切換知識庫（預設 nrc_vad）
-    backend = config.get('knowledge_backend', 'nrc_vad')
-    from datasets.loader_knowledge import set_knowledge_backend, reset_senticnet
+    from datasets.loader_knowledge import reset_senticnet
     reset_senticnet()
-    set_knowledge_backend(backend)
-    print(f"[Config] knowledge_backend = {backend}")
 
     # 轉換為命令行參數（傳入 dataset 以選擇對應的 bert_model）
     train_args = config_to_args(config, dataset=args.dataset)
