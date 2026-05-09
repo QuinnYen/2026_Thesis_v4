@@ -7,7 +7,7 @@ SemEval-2014 Multi-Aspect 數據加載器
 """
 
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Tuple, Optional
+from typing import List, Tuple, Optional
 from collections import Counter
 import numpy as np
 
@@ -233,21 +233,6 @@ class SemEvalMultiAspectLoader:
             return [real_aspect], [real_label]
 
     def _print_statistics(self):
-        """打印統計信息（簡化版）"""
-        # 簡化輸出：只顯示關鍵統計
-        pass  # 統計信息已在主訓練腳本中顯示
-
-    def get_samples(self) -> List[MultiAspectSample]:
-        """獲取樣本"""
-        return self.samples
-
-    def get_statistics(self) -> Dict:
-        """獲取統計信息"""
-        return self.statistics
-
-    def print_examples(self, num_examples: int = 5):
-        """打印範例（簡化版）"""
-        # 簡化輸出：不打印範例
         pass
 
 
@@ -472,7 +457,7 @@ def load_multiaspect_data(
 
 
 if __name__ == '__main__':
-    """測試數據加載"""
+    # 測試數據加載
     import sys
     from pathlib import Path
 

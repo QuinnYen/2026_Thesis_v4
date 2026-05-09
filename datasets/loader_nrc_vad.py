@@ -25,7 +25,7 @@ class NRCVADKnowledge:
 
     - 載入 Unigrams 版（44,728 個單字），valence [-1, 1] 直接作為極性值
     - 與 SenticNetKnowledge 介面完全相容：
-        get_polarity() / get_polarity_with_coverage() / get_coverage_mask() / batch_lookup()
+        get_polarity() / get_polarity_with_coverage() / batch_lookup()
     - 支援 Domain Filter（共用 loader_senticnet.py 的 DOMAIN_TECHNICAL_TERMS）
     - 未知詞 fallback 為 mean_valence（≈ 0，不引入偏差）
     """
@@ -116,15 +116,6 @@ class NRCVADKnowledge:
             print(f"[NRC-VAD] Unknown domain '{domain}', filter disabled")
         self.polarity_cache.clear()
 
-    def disable_domain_filter(self):
-        self.domain_filter_enabled = False
-        self.polarity_cache.clear()
-
-    def enable_domain_filter(self):
-        if self.domain_filter_terms:
-            self.domain_filter_enabled = True
-            self.polarity_cache.clear()
-
     # -------------------------------------------------------------------------
     # 極性查詢（與 SenticNetKnowledge 相容介面）
     # -------------------------------------------------------------------------
@@ -151,10 +142,6 @@ class NRCVADKnowledge:
         if clean in self.lexicon:
             return self.lexicon[clean], True
         return self._neutral_mean_polarity, False
-
-    def get_coverage_mask(self, words: List[str]) -> torch.Tensor:
-        mask = [1.0 if self._clean_word(w) in self.lexicon else 0.0 for w in words]
-        return torch.tensor(mask, dtype=torch.float32)
 
     def batch_lookup(
         self, tokens: List[str], device: torch.device = None

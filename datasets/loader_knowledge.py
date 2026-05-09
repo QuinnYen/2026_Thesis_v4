@@ -8,12 +8,10 @@ hkgan.py 呼叫 get_senticnet() / reset_senticnet()，
 用法：
     # configs/unified_hkgan.yaml 加入：
     #   knowledge_backend: nrc_vad   # 或 senticnet
-
-    # hkgan.py 不需要任何改動，仍 import：
-    #   from datasets.loader_senticnet import get_senticnet, reset_senticnet
-    # 但 train_multiaspect.py 在建模型前呼叫：
+    # train_from_config.py 在建模型前呼叫：
     #   from datasets.loader_knowledge import set_knowledge_backend
     #   set_knowledge_backend(config.get('knowledge_backend', 'nrc_vad'))
+    # hkgan.py 從本模組 import get_senticnet / reset_senticnet
 """
 
 from typing import Union

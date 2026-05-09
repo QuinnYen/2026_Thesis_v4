@@ -12,11 +12,6 @@ SenticNet 數據格式（SN5/6/7 一致）:
                          primary_emotion, secondary_emotion, polarity_label,
                          polarity_value, semantics1-5...]
 
-核心改進（解決 Neutral 識別問題）：
-1. Domain Filtering: 針對特定領域（如 Laptops）的技術術語，
-   遮蔽其通用情感極性，避免將客觀描述誤判為情感表達
-2. 未登錄詞標記：區分「中性詞（polarity=0）」與「未知詞」
-
 Reference:
     Cambria et al. "SenticNet 7: Commonsense-Based Neurosymbolic AI for
     Explainable Sentiment Analysis" (AAAI 2022)
@@ -25,7 +20,7 @@ Reference:
 import os
 import torch
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Set
+from typing import Dict, List, Optional, Set
 import re
 
 
@@ -241,32 +236,6 @@ class SenticNetKnowledge:
                   if isinstance(entry[7], (int, float))]
         return sum(values) / len(values) if values else 0.0
 
-    def _wordnet_lookup(self, clean_word: str) -> Optional[float]:
-        """
-        透過 WordNet 同義詞進行二次查找
-
-        Args:
-            clean_word: 已清理的詞（小寫、無標點）
-
-        Returns:
-            極性值（float）如果找到同義詞；否則返回 None
-        """
-        try:
-            from nltk.corpus import wordnet
-            for syn in wordnet.synsets(clean_word):
-                for lemma in syn.lemmas():
-                    # 嘗試帶空格的形式
-                    candidate = lemma.name().lower().replace('_', ' ')
-                    if candidate in self.senticnet:
-                        return self.senticnet[candidate][7]
-                    # 嘗試原始下劃線形式
-                    candidate_us = lemma.name().lower()
-                    if candidate_us in self.senticnet:
-                        return self.senticnet[candidate_us][7]
-        except Exception:
-            pass
-        return None
-
     # =========================================================================
     # 領域特定過濾（Domain-specific Filtering）
     # =========================================================================
@@ -295,21 +264,6 @@ class SenticNetKnowledge:
         # 清空緩存（因為過濾規則變了）
         self.polarity_cache.clear()
 
-    def disable_domain_filter(self):
-        """禁用領域過濾"""
-        self.domain_filter_enabled = False
-        self.polarity_cache.clear()
-        print("[SenticNet] Domain filter disabled")
-
-    def enable_domain_filter(self):
-        """啟用領域過濾（需先設置領域）"""
-        if self.domain_filter_terms:
-            self.domain_filter_enabled = True
-            self.polarity_cache.clear()
-            print("[SenticNet] Domain filter enabled")
-        else:
-            print("[SenticNet] Warning: No domain set, cannot enable filter")
-
     def is_technical_term(self, word: str) -> bool:
         """
         檢查詞彙是否為當前領域的技術術語
@@ -325,17 +279,6 @@ class SenticNetKnowledge:
 
         clean_word = self._clean_word(word)
         return clean_word in self.domain_filter_terms
-
-    def add_technical_terms(self, terms: List[str]):
-        """
-        動態添加技術術語到過濾列表
-
-        Args:
-            terms: 要添加的術語列表
-        """
-        self.domain_filter_terms.update(term.lower() for term in terms)
-        self.polarity_cache.clear()
-        print(f"[SenticNet] Added {len(terms)} custom technical terms")
 
     # =========================================================================
     # 極性查詢（含領域過濾）
@@ -419,22 +362,6 @@ class SenticNetKnowledge:
         # 未找到：均值 + 標記為未知（模型透過 coverage_mask 屏蔽 gate）
         return self._neutral_mean_polarity, False
 
-    def get_coverage_mask(self, words: List[str]) -> torch.Tensor:
-        """
-        獲取詞彙列表的覆蓋掩碼
-
-        Args:
-            words: 詞彙列表
-
-        Returns:
-            mask: [len(words)]，1 表示在知識庫中，0 表示未知
-        """
-        mask = []
-        for word in words:
-            _, is_known = self.get_polarity_with_coverage(word)
-            mask.append(1.0 if is_known else 0.0)
-        return torch.tensor(mask, dtype=torch.float32)
-
     def _clean_word(self, word: str) -> str:
         """
         清理詞彙用於查詢
@@ -513,38 +440,6 @@ class SenticNetKnowledge:
             tensor = tensor.to(device)
 
         return tensor
-
-    def batch_lookup_2d(
-        self,
-        token_lists: List[List[str]],
-        device: torch.device = None,
-        pad_value: float = 0.0
-    ) -> torch.Tensor:
-        """
-        批量查詢 2D token 列表（用於 batch 處理）
-
-        Args:
-            token_lists: 2D 詞彙列表 [batch_size, seq_len]
-            device: 輸出張量的設備
-            pad_value: 填充值
-
-        Returns:
-            torch.Tensor: [batch_size, seq_len] 極性值張量
-        """
-        batch_size = len(token_lists)
-        max_len = max(len(tokens) for tokens in token_lists)
-
-        # 初始化為填充值
-        polarities = torch.full((batch_size, max_len), pad_value)
-
-        for i, tokens in enumerate(token_lists):
-            for j, token in enumerate(tokens):
-                polarities[i, j] = self.get_polarity(token)
-
-        if device is not None:
-            polarities = polarities.to(device)
-
-        return polarities
 
     def get_related_concepts(self, word: str, top_k: int = 5) -> List[str]:
         """

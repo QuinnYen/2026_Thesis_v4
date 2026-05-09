@@ -11,7 +11,7 @@ SemEval-2016 Multi-Aspect 數據加載器
 """
 
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Tuple, Optional
+from typing import List, Tuple
 from collections import Counter
 import numpy as np
 
@@ -201,11 +201,7 @@ class SemEval2016MultiAspectLoader:
         return [real_aspect, virtual_aspect], [real_label, virtual_label]
 
     def _print_statistics(self):
-        """打印統計信息"""
-        print(f"\n  SemEval-2016 數據加載完成:")
-        print(f"    總樣本數: {self.statistics['total_samples']}")
-        print(f"    平均 aspects: {self.statistics['avg_aspects_per_sample']:.2f}")
-        print(f"    樣本分佈: {self.statistics['sample_aspect_distribution']}")
+        pass
 
 
 def load_semeval2016_data(
@@ -232,7 +228,6 @@ def load_semeval2016_data(
     返回:
         (train_samples, val_samples, test_samples)
     """
-    print(f"\n加載 SemEval-2016 訓練數據: {train_path}")
     train_loader = SemEval2016MultiAspectLoader(
         xml_path=train_path,
         min_aspects=min_aspects,
@@ -242,7 +237,6 @@ def load_semeval2016_data(
     )
     train_all_samples = train_loader.load()
 
-    print(f"\n加載 SemEval-2016 測試數據: {test_path}")
     test_loader = SemEval2016MultiAspectLoader(
         xml_path=test_path,
         min_aspects=min_aspects,
@@ -262,10 +256,5 @@ def load_semeval2016_data(
 
     train_samples = [train_all_samples[i] for i in train_indices]
     val_samples = [train_all_samples[i] for i in val_indices]
-
-    print(f"\n數據分割:")
-    print(f"  訓練集: {len(train_samples)}")
-    print(f"  驗證集: {len(val_samples)}")
-    print(f"  測試集: {len(test_samples)}")
 
     return train_samples, val_samples, test_samples
