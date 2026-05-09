@@ -137,7 +137,7 @@ def create_baseline(
     baseline_type: str,
     bert_model_name: str = 'bert-base-uncased',
     freeze_bert: bool = False,
-    hidden_dim: int = 768,
+    hidden_dim: int = 768,  # 未使用，保留以相容呼叫方介面
     num_classes: int = 3,
     dropout: float = 0.1
 ):

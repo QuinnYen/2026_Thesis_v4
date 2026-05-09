@@ -17,7 +17,6 @@ Improved Models for ABSA
 """
 
 import sys
-import os
 from pathlib import Path
 
 # Add project root to path
@@ -29,7 +28,6 @@ import torch.nn.functional as F
 
 from models.bert_embedding import BERTForABSA
 from models.base_model import BaseModel
-from models.hierarchical_syntax import HierarchicalSyntaxAttention, create_hsa_model
 
 
 class HierarchicalBERT(BaseModel):
@@ -1273,7 +1271,7 @@ def create_improved_model(model_type, args, num_classes=3):
             num_classes=num_classes,
             dropout=dropout,
             freeze_bert=getattr(args, 'freeze_bert', False),
-            num_heads=getattr(args, 'num_attention_heads', 4)
+            num_attention_heads=getattr(args, 'num_attention_heads', 4)
         )
 
     elif model_type == 'iarn':
@@ -1283,8 +1281,7 @@ def create_improved_model(model_type, args, num_classes=3):
             num_classes=num_classes,
             dropout=dropout,
             freeze_bert=getattr(args, 'freeze_bert', False),
-            num_heads=getattr(args, 'iarm_heads', 4),
-            num_layers=getattr(args, 'iarm_layers', 2)
+            num_attention_heads=getattr(args, 'iarm_heads', 4)
         )
 
     elif model_type == 'vp_iarn':
@@ -1294,8 +1291,7 @@ def create_improved_model(model_type, args, num_classes=3):
             num_classes=num_classes,
             dropout=dropout,
             freeze_bert=getattr(args, 'freeze_bert', False),
-            num_heads=getattr(args, 'iarm_heads', 4),
-            num_layers=getattr(args, 'iarm_layers', 2)
+            num_attention_heads=getattr(args, 'iarm_heads', 4)
         )
 
     elif model_type == 'hkgan':
