@@ -24,7 +24,6 @@ def analyze_dataset(samples: List[Any]) -> Dict[str, Any]:
             'total_samples': 0,
             'multi_aspect_ratio': 0.0,
             'avg_aspects': 0.0,
-            'recommended_model': 'hierarchical'
         }
 
     total = len(samples)
