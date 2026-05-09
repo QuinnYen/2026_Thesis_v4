@@ -1,37 +1,11 @@
-# HKGAN: Hierarchical Knowledge-enhanced Graph Attention Network (v3.0)
-# 核心創新：階層式 BERT + SenticNet 知識 + 純 PyTorch GAT + 跨面向建模
-#
-# v3.0 新增（解決 MAMS 複雜句問題）：
-#   - 動態知識門控 (Dynamic Knowledge Gating)：根據 BERT 上下文動態決定是否信任 SenticNet
-#   - 解決 v2.x 的「硬性注入」問題：
-#     * 舊版：Feature_new = Feature_BERT + λ * SenticNet（固定權重）
-#     * 新版：Gate = Sigmoid(Linear([BERT, SenticNet]))
-#             Feature_new = (1 - Gate) * BERT + Gate * SenticNet_embed
-#   - 行為：
-#     * 簡單句（Laptops/Restaurants）：Gate 高，利用 SenticNet 增強
-#     * 複雜句（MAMS 轉折句 "But", "However"）：Gate 低，只相信 BERT
-#   - 預期效果：MAMS F1 85%+
-#
-# v2.3（解決蹺蹺板效應）：
-#   - 情感感知隔離 (Sentiment-Aware Isolation)
-#
-# v2.2（解決情感洩漏問題）：
-#   - 情感隔離機制 (Sentiment Isolation)
-#
-# v2.0 功能（解決 Neutral 識別問題）：
-#   - Domain Filtering、Confidence Gating、Coverage Mask
-#
-# 預期性能：
-#   - Restaurants: 78-81% F1
-#   - Laptops: 72-75% F1 (Neutral F1 55%+, Neg F1 73%+)
-#   - MAMS: 84-86% F1
+# HKGAN: Hierarchical Knowledge-enhanced Graph Attention Network
+# 核心創新：階層式 BERT + SenticNet 知識門控 + 純 PyTorch GAT + 跨面向建模
 
 experiment_name: "hkgan"
 
 model:
   improved: "hkgan"
   # DAPT 模型對應表：根據資料集自動選擇
-  # 若資料集不在列表中，使用 default
   bert_model:
     laptops: "data/dapt/laptop_dapt/final"
     lap16: "data/dapt/laptop_dapt/final"
@@ -43,51 +17,35 @@ model:
   dropout: 0.3
 
   # GAT 參數
-  gat_heads: 4          # 圖注意力頭數
-  gat_layers: 2         # GAT 層數
+  gat_heads: 4
+  gat_layers: 2
+  iarm_heads: 4
 
   # SenticNet 知識增強
   use_senticnet: true
-  knowledge_weight:       # 方案三十：per-dataset 知識注入強度
-    restaurants: 0.02     # 消融 +0.43%（知識是噪音），極輕觸
-    laptops: 0.02         # 消融 +1.02%（知識是噪音），極輕觸
-    mams: 0.02            # 消融 +0.23%，極輕觸
-    rest16: 0.1           # 消融 -1.63%（知識有效），維持原值
-    lap16: 0.05           # 消融 -0.43%（知識略有效），輕度降低
+  knowledge_weight:
+    restaurants: 0.02
+    laptops: 0.02
+    mams: 0.02
+    rest16: 0.1
+    lap16: 0.05
     default: 0.1
 
-  # ========== Neutral 識別改進（v2.0 新增）==========
-  # 信心門控：讓模型根據上下文動態決定是否信任 SenticNet
-  # 解決問題：技術語境下的通用情感詞會被誤判
-  # 例如："high resolution" 中的 "high" 應被視為中性
+  # 信心門控：動態決定是否信任 SenticNet
   use_confidence_gate: true
 
-  # ========== 動態知識門控（v3.0 新增）==========
-  # 從「硬性注入」改為「軟性門控」
-  # 解決問題：MAMS 複雜句（含轉折詞）中 SenticNet 與上下文衝突
-  # 例如："The food is great, but the service is terrible"
-  #       "great" 不應影響 "service" 的情感判斷
-  # 行為：模型自動學習何時信任外部知識，何時只相信 BERT
+  # 動態知識門控：軟性門控取代硬性注入
   use_dynamic_gate: true
 
-  # 領域過濾：已停用（方案二十七，2026-04-24）
-  # 原設計：手工黑名單讓 'cheap'/'slow'/'crowded' 強制回傳 polarity=0
-  # 停用原因：上述詞在評論中實為負面，強制歸零干擾 Gate 學習；
-  #           Dynamic Gate（v3.0）已能自動決定何時信任 SenticNet，Filter 冗餘。
-  # domain: null → set_domain() 不呼叫 → 無任何術語被過濾
+  # 已停用領域過濾（Dynamic Gate 取代）
   domain: null
 
-  # IARN 參數 (用於跨面向建模)
-  iarm_heads: 4
-
-# 知識庫 backend 選擇（方案二十三+）
-# nrc_vad  : NRC VAD Lexicon v2.1（2025）—單字覆蓋率高（LAP ~85%），推薦
-# senticnet : SenticNet（手上版本，LAP ~23% 覆蓋率）
+# 知識庫 backend：nrc_vad（覆蓋率高）或 senticnet
 knowledge_backend: senticnet
 
 data:
-  use_augmented: false  # 關閉 Claude 增強
-  use_self_training: false  # Step 0: 先訓練基礎模型
+  use_augmented: false
+  use_self_training: false
   min_aspects: 2
   max_aspects: 8
   include_single_aspect: true
@@ -96,19 +54,19 @@ data:
   max_aspect_len: 10
 
 training:
-  batch_size: 16          # GAT 較耗內存，使用較小 batch
-  accumulation_steps: 2   # 等效 batch_size = 32
-  epochs: 40              # 方案四：延長給慢速收斂資料集（REST16/MAMS）更多機會
-  lr:                     # 方案七：各資料集針對性學習率
+  batch_size: 16
+  accumulation_steps: 2    # 等效 batch_size = 32
+  epochs: 40
+  lr:
     restaurants: 3.0e-5
-    laptops: 3.0e-5       # LAP14 v2：回標準 lr（2e-5 過保守導致退步）
+    laptops: 3.0e-5
     mams: 3.0e-5
     rest16: 3.0e-5
     lap16: 2.0e-5
     default: 3.0e-5
   weight_decay: 0.01
   grad_clip: 1.0
-  patience: 12            # 方案四：配合 epochs 40，給更長的等待窗口
+  patience: 12
   seed: 42
 
   use_scheduler: true
@@ -116,69 +74,43 @@ training:
 
   # 損失函數配置
   loss_type: "focal"
-  focal_gamma:            # 方案七：各資料集針對性 gamma（順序：Neg/Neu/Pos 難樣本聚焦）
+  focal_gamma:
     restaurants: 2.5
-    laptops: 2.5          # LAP14 v2：適中 gamma（3.0 過強導致退步）
+    laptops: 2.5
     mams: 2.0
     rest16: 2.0
     lap16: 2.5
     default: 2.0
-  class_weights:          # 方案七：手動設定（依 inverse freq 人工審核，auto 因不可預期放棄）
-    restaurants: [1.2, 2.0, 0.6]  # Pos 61%：壓 Pos，提 Neu
-    laptops: [1.0, 1.8, 0.7]      # 接近舊值，穩定優先
-    mams: [1.0, 1.0, 1.0]         # 三類均衡，不需調整
-    rest16: [1.5, 3.0, 0.5]       # 已驗證有效（Pos 73% 極端偏斜）
-    lap16: [1.2, 2.0, 0.6]        # 類似 restaurants
-    default: [1.0, 1.8, 0.8]      # fallback
+  class_weights:
+    restaurants: [1.2, 2.0, 0.6]
+    laptops: [1.0, 1.8, 0.7]
+    mams: [1.0, 1.0, 1.0]
+    rest16: [1.5, 3.0, 0.5]
+    lap16: [1.2, 2.0, 0.6]
+    default: [1.0, 1.8, 0.8]
 
   virtual_weight: 0.5
 
-  # LLRD (可選)
+  # LLRD
   use_llrd: true
-  llrd_decay:             # 方案七：各資料集針對性 LLRD decay
+  llrd_decay:
     restaurants: 0.95
-    laptops: 0.95         # LAP14 v2：回標準（0.90 過保守）
+    laptops: 0.95
     mams: 0.95
     rest16: 0.95
     lap16: 0.90
     default: 0.95
 
-  # ========== 非對稱 Logit 調整 (Asymmetric Logit Adjustment) ==========
-  # 推理時調整 logits，專門解決 Neutral 誤判問題
-  #
-  # 數學效果：
-  #   原本：L_Neg > L_Neu（被誤判為 Neg）
-  #   調整後：(L_Neg - neg_suppress) vs (L_Neu + neutral_boost)
-  #   等效翻轉力 = neutral_boost + neg_suppress
-  #
-  # 優勢：兩個參數分別針對不同錯誤類型，互不干擾
-  #   - neutral_boost 解決 Neu→Pos，不影響 Neg→Neu
-  #   - neg_suppress 解決 Neu→Neg，不影響 Pos→Neu
-  #
-  # 支援資料集對應表：不同領域有不同的類別分布特性
-  #   - Laptops: Neutral 比例高 (~27%)，需要較強的調整
-  #   - Restaurants: Neutral 比例低 (~18%)，從零開始調整
-  #   - MAMS: Neutral 比例高 (~33%)，需要調整
-  #
-  # 以下三個參數由驗證集 Grid Search 自動決定（train_multiaspect.py），
-  # 此處統一設為 0.0 作為初始值（grid search 覆蓋這些值）
+  # 非對稱 Logit 調整：grid search 初始值，由驗證集自動決定
   neutral_boost:
     default: 0.0
-
   neg_suppress:
     default: 0.0
-
   pos_suppress:
     default: 0.0
 
-  # ========== 方案二十：Stratified Batch Sampler ==========
-  # 強制 batch 內各類別均有訊號，解決 REST16 Neutral 9% batch 空缺問題
-  # 開啟後建議同步將 class_weights 從 [1.5, 3.0, 0.5] 適度調回（避免雙重補償）
+  # Stratified Batch Sampler：均衡各類別訓練訊號
   use_stratified_sampler: true
 
-  # ========== 方案二十九：Gate Penalty（端到端 Gate 監督）==========
-  # 對預測錯誤的 aspect 懲罰高 gate 值，讓 Gate 從錯誤中學習「何時不信任知識庫」
-  # 解決 NRC-VAD 技術詞語義衝突（battery=-1.08/ram=-1.38 在 LAP 語境下為錯誤極性）
-  # 0.0 = 關閉；建議起點 0.1，若 Gate 過度抑制可降至 0.05
+  # Gate Penalty，0.0 = 關閉
   gate_penalty_weight: 0.0
-

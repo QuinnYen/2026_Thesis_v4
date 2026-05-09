@@ -1,25 +1,20 @@
-# Unified Baseline Configuration
-# 統一配置：所有數據集使用相同的超參數
+# Unified Baseline Configuration（BERT-CLS，所有資料集統一超參數）
 #
 # 使用方法:
 #   python run_experiments.py --dataset restaurants
 #   python run_experiments.py --dataset laptops
 #   python run_experiments.py --dataset mams
-#
-# 注意：使用 BERT-base 作為 backbone，與 HKGAN 保持一致
 
 experiment_name: "baseline_bert_cls"
 
-# 模型配置 (所有數據集統一)
 model:
   baseline: "bert_cls"
   bert_model: "bert-base-uncased"
   freeze_bert: false
   dropout: 0.3
 
-# 數據配置
 data:
-  use_augmented: false  # 關閉數據增強，保持原始分布
+  use_augmented: false
   min_aspects: 2
   max_aspects: 8
   include_single_aspect: true
@@ -27,7 +22,6 @@ data:
   max_text_len: 128
   max_aspect_len: 10
 
-# 訓練配置 (所有數據集統一)
 training:
   batch_size: 32
   accumulation_steps: 1
@@ -38,14 +32,11 @@ training:
   patience: 10
   seed: 42
 
-  # 調度器
   use_scheduler: true
   warmup_ratio: 0.1
 
-  # 損失函數 - 統一配置
   loss_type: "focal"
   focal_gamma: 2.0
-  class_weights: "auto"  # 動態計算，根據數據集自動調整
+  class_weights: "auto"   # 依資料集分布動態計算
 
-  # Virtual aspect
   virtual_weight: 0.5

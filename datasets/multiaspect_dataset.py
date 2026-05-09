@@ -43,21 +43,9 @@ class MultiAspectBERTDataset(Dataset):
         max_num_aspects: int = 8,
         soft_labels_dict: dict = None  # {(text, aspect): [neg, neu, pos]}
     ):
-        """
-        初始化
-
-        參數:
-            samples: MultiAspectSample 列表
-            tokenizer: BERT tokenizer
-            max_text_len: 最大文本長度（text + aspect 的總長度）
-            max_aspect_len: 最大 aspect 長度（保留用於兼容性）
-            max_num_aspects: 最大 aspect 數量（用於 padding）
-            soft_labels_dict: (可選) Claude soft labels 字典
-        """
         self.samples = samples
         self.tokenizer = tokenizer
         self.max_seq_len = max_text_len  # 總序列長度 (text + aspect)
-        self.max_aspect_len = max_aspect_len
         self.max_num_aspects = max_num_aspects
         self.soft_labels_dict = soft_labels_dict  # {(text, aspect): [neg, neu, pos]}
 
@@ -342,21 +330,21 @@ def create_multiaspect_dataloaders(
     max_num_aspects: int = 8,
     num_workers: int = 0,  # Windows subprocess 環境下 num_workers>0 會造成 deadlock
     soft_labels_dict: dict = None,  # {(text, aspect): [neg, neu, pos]}
-    use_stratified_sampler: bool = False  # 方案二十：Stratified Batch Sampler
+    use_stratified_sampler: bool = False
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     創建 DataLoader
 
     參數:
-        train_samples: 訓練樣本
-        val_samples: 驗證樣本
-        test_samples: 測試樣本
+        train_samples/val_samples/test_samples: 各分割樣本
         tokenizer: BERT tokenizer
         batch_size: Batch size
-        max_text_len: 最大文本長度
-        max_aspect_len: 最大 aspect 長度
-        max_num_aspects: 最大 aspect 數量
-        num_workers: DataLoader workers
+        max_text_len: 最大序列長度（text + aspect）
+        max_aspect_len: 已不使用，保留介面兼容性
+        max_num_aspects: 最大 aspect 數量（用於 padding）
+        num_workers: DataLoader workers（Windows 建議設 0）
+        soft_labels_dict: 知識蒸餾用 soft labels（loss_type='distill' 時啟用）
+        use_stratified_sampler: 啟用 Stratified Batch Sampler 均衡類別訓練訊號
 
     返回:
         (train_loader, val_loader, test_loader)
@@ -424,7 +412,7 @@ def create_multiaspect_dataloaders(
 
 
 if __name__ == '__main__':
-    """測試 Dataset 和 DataLoader"""
+    # 測試 Dataset 和 DataLoader
     from pathlib import Path
     from datasets.loader_semeval14 import load_multiaspect_data
     from transformers import AutoTokenizer
