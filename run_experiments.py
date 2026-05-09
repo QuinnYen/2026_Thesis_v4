@@ -427,7 +427,6 @@ def generate_multi_seed_report(dataset, results):
         "=" * 80,
         f"Seeds: {[r['seed'] for r in results]}  Runs: {len(results)}",
         "",
-        # ── Baseline vs HKGAN 對比 ──
         "-" * 80,
         "Baseline vs HKGAN (Mean)",
         "-" * 80,
@@ -470,7 +469,6 @@ def generate_multi_seed_report(dataset, results):
             f"  {'✓' if f1_mean > b_f1 else '✗'} HKGAN {'超越' if f1_mean > b_f1 else '未能超越'} Baseline {abs(f1_mean - b_f1):.2f}% (Macro-F1)",
         ]
 
-    # ── 各 seed 明細 ──
     report += [
         "",
         "-" * 80,
@@ -484,7 +482,6 @@ def generate_multi_seed_report(dataset, results):
         auc_s = f"{r['auc_macro']*100:<12.2f}" if r.get('auc_macro') else "N/A         "
         report.append(f"{r['seed']:<10} {r['accuracy']*100:<12.2f} {r['f1_macro']*100:<15.2f} {auc_s} {fc[0]*100:<10.2f} {fc[1]*100:<10.2f} {fc[2]*100:<10.2f}")
 
-    # ── 彙總統計 ──
     report += [
         "-" * 80,
         "",
@@ -503,7 +500,6 @@ def generate_multi_seed_report(dataset, results):
         "-" * 80,
     ]
 
-    # ── 穩定性評估 ──
     if f1_std < 1.0:   stability = "Excellent (σ < 1%)"
     elif f1_std < 2.0: stability = "Good (1% ≤ σ < 2%)"
     elif f1_std < 3.0: stability = "Fair (2% ≤ σ < 3%)"
@@ -520,7 +516,6 @@ def generate_multi_seed_report(dataset, results):
         report.append(f"  Coefficient of Variation: {f1_std/f1_mean*100:.2f}%")
     report.append("")
 
-    # ── Logit Adjustment 統計 ──
     adj_records = [r.get('logit_adj', {}) for r in results if r.get('logit_adj')]
     if adj_records:
         from collections import Counter
@@ -605,7 +600,6 @@ def run_statistical_significance_test(datasets=None):
         hkgan_acc_by_seed   = {}
         baseline_acc_by_seed= {}
 
-        # 讀取 HKGAN 結果
         hkgan_dir = improved_dir / dataset
         if hkgan_dir.exists():
             for exp in hkgan_dir.glob("*_hkgan*"):
@@ -931,7 +925,6 @@ def main():
         return
 
     if args.ensemble_only:
-        # 只跑 Ensemble 推理，結果存 HKGAN_Ensemble_{dataset}.txt
         for ds in ALL_DATASETS:
             imp_dir = Path("results/improved") / ds
             if imp_dir.exists() and any(imp_dir.glob("*/reports/experiment_results.json")):
@@ -941,7 +934,6 @@ def main():
         return
 
     if args.report_only:
-        # HKGAN 對比報告 + 統計顯著性 + 論文圖表（不含 Ensemble）
         for ds in ALL_DATASETS:
             generate_hkgan_report(ds)
         run_statistical_significance_test()

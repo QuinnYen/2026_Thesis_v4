@@ -198,7 +198,7 @@ def run_multi_seed_ablation(ablation_type, dataset):
         bool: 所有種子是否都成功
     """
     # 消融實驗結果存放在 results/ablation/{dataset}/ 下
-    results_dir = Path("results/ablation") / dataset
+    results_dir = Path("results/ablation") / dataset  # 消融結果統一存放在此
     seeds = MULTI_SEED_LIST
 
     print(f"\n{'='*80}")
@@ -218,7 +218,6 @@ def run_multi_seed_ablation(ablation_type, dataset):
 
         if success:
             success_count += 1
-            # 讀取最新實驗結果
             result = get_latest_experiment_result(results_dir, ablation_type)
             if result:
                 results.append({
@@ -234,7 +233,6 @@ def run_multi_seed_ablation(ablation_type, dataset):
         else:
             print(f"  [FAIL] seed={seed}: 失敗")
 
-    # 生成多種子報告
     if results:
         generate_multi_seed_ablation_report(ablation_type, dataset, results)
 
@@ -285,11 +283,9 @@ def get_latest_experiment_result(results_dir, ablation_type):
 
 def generate_multi_seed_ablation_report(ablation_type, dataset, results):
     """生成多種子消融實驗報告"""
-    # 報告存到 results/ablation/{dataset}/ 下
     reports_dir = Path("results/ablation") / dataset
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    # 計算統計數據
     accuracies = [r['accuracy'] * 100 for r in results]
     f1_macros = [r['f1_macro'] * 100 for r in results]
     f1_neg = [r['f1_per_class'][0] * 100 for r in results if len(r['f1_per_class']) >= 3]
@@ -339,7 +335,7 @@ def generate_multi_seed_ablation_report(ablation_type, dataset, results):
     report.append("-" * 80)
     report.append("")
 
-    # Logit Adjustment Grid Search 結果
+    # Logit Adjustment Grid Search
     adj_records = [r.get('logit_adj', {}) for r in results if r.get('logit_adj')]
     if adj_records:
         report.append("-" * 80)
@@ -363,7 +359,6 @@ def generate_multi_seed_ablation_report(ablation_type, dataset, results):
 
     report.append("=" * 80)
 
-    # 保存報告
     report_text = "\n".join(report)
     output_file = reports_dir / f"ablation_{ablation_type}_{dataset}.txt"
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -424,7 +419,6 @@ def run_all_ablations(dataset, multi_seed=False, variants=None):
 
         results[ablation_type] = 'Success' if success else 'Failed'
 
-    # 總結報告
     print(f"\n{'='*80}")
     print(f"[All Ablations Summary] {DATASET_DISPLAY_NAMES.get(dataset, dataset.upper())}")
     print(f"{'='*80}")
@@ -434,7 +428,6 @@ def run_all_ablations(dataset, multi_seed=False, variants=None):
         print(f"  {ablation_type:<20s}: {status:<10s} ({desc})")
     print(f"{'='*80}\n")
 
-    # 生成跨資料集總結報告
     generate_ablation_summary_report()
 
 
@@ -464,7 +457,6 @@ def run_full_study(multi_seed=False):
         run_all_ablations(dataset, multi_seed=multi_seed)
         all_results[dataset] = 'Completed'
 
-    # 最終總結
     print(f"\n{'='*80}")
     print(f"[Full Study Complete]")
     print(f"{'='*80}")
@@ -472,7 +464,6 @@ def run_full_study(multi_seed=False):
         print(f"  {DATASET_DISPLAY_NAMES.get(dataset, dataset.upper()):<12s}: {status}")
     print(f"{'='*80}\n")
 
-    # 生成跨資料集總結報告
     generate_ablation_summary_report()
 
 
@@ -485,8 +476,7 @@ def _get_ablation_full_f1(dataset):
     json_file = Path("results/ablation") / dataset / f"ablation_full_{dataset}.json"
     if json_file.exists():
         try:
-            import json as _json
-            data = _json.loads(json_file.read_text(encoding='utf-8'))
+            data = json.loads(json_file.read_text(encoding='utf-8'))
             return data['aggregated']['f1_macro']['mean']
         except Exception:
             pass
@@ -498,8 +488,7 @@ def _get_ablation_full_f1(dataset):
             result_file = exp_dir / "reports" / "experiment_results.json"
             if result_file.exists():
                 try:
-                    import json as _json
-                    data = _json.loads(result_file.read_text(encoding='utf-8'))
+                    data = json.loads(result_file.read_text(encoding='utf-8'))
                     return data.get('test_metrics', {}).get('f1_macro', 0.0) * 100
                 except Exception:
                     pass
@@ -518,7 +507,6 @@ def generate_ablation_summary_report():
         print("錯誤: 沒有找到消融實驗結果目錄")
         return
 
-    # 收集所有 JSON 結果（所有消融變體統一在 results/ablation/ 下）
     all_results = {}
 
     # 方法 1: 搜尋多種子彙總報告 (ablation_*.json)
@@ -600,7 +588,6 @@ def generate_ablation_summary_report():
         print("錯誤: 沒有找到有效的消融實驗結果")
         return
 
-    # 生成總結報告
     report = []
     report.append("=" * 100)
     report.append("消融實驗總結報告 (Ablation Study Summary)")
@@ -620,7 +607,6 @@ def generate_ablation_summary_report():
         report.append(f"{'Variant':<25} {'Acc (%)':<15} {'Macro-F1 (%)':<15} {'Neu F1 (%)':<15} {'Delta F1':<10}")
         report.append("-" * 100)
 
-        # 獲取消融基準（ablation full，統一超參）的 F1
         baseline_f1 = _get_ablation_full_f1(dataset)
 
         for ablation_type in ABLATION_ORDER:
@@ -649,7 +635,6 @@ def generate_ablation_summary_report():
     report.append("    ablation_full F1 略低於主實驗，但消融 delta 更準確反映各組件的獨立貢獻。")
     report.append("=" * 100)
 
-    # 保存報告
     report_text = "\n".join(report)
     output_file = reports_dir / "ablation_summary.txt"
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -742,32 +727,27 @@ def main():
 
     args = parser.parse_args()
 
-    # 列出消融變體
     if args.list:
         list_ablations()
         return
 
-    # 只生成跨資料集總結報告
     if args.summary_only:
         generate_ablation_summary_report()
         return
 
-    # 完整消融研究
     if args.full_study:
         run_full_study(multi_seed=args.multi_seed)
         _maybe_cleanup(args.auto_cleanup)
         return
 
-    # 執行所有消融變體（或指定的變體子集）
     if args.all:
         if args.dataset is None:
             parser.error("--all 需要指定 --dataset")
-        variants = args.variants if args.variants else None  # None = 使用預設 ABLATION_ORDER
+        variants = args.variants if args.variants else None
         run_all_ablations(args.dataset, multi_seed=args.multi_seed, variants=variants)
         _maybe_cleanup(args.auto_cleanup)
         return
 
-    # 沒有指定任何動作
     parser.print_help()
 
 
