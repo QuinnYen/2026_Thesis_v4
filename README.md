@@ -4,7 +4,6 @@
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?logo=pytorch&logoColor=white)
 ![Transformers](https://img.shields.io/badge/HuggingFace-Transformers-FFD21E?logo=huggingface&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-22c55e)
-![Status](https://img.shields.io/badge/Status-論文收尾中-8b5cf6)
 
 面向級情感分析（Aspect-Level Sentiment Analysis）深度學習框架，整合階層式 BERT 特徵提取與 SenticNet 情感知識庫。
 
