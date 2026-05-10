@@ -823,15 +823,19 @@ def _backup_and_cleanup(execute: bool) -> None:
     date_str     = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path  = project_root / "backup" / date_str
 
+    if not results_root.exists():
+        print(f"\n  results/ 資料夾不存在，無需清理。\n")
+        return
+
     top_txt = sorted(results_root.glob("*.txt"))
     exp_dirs = [
         exp_dir
         for category in ["ablation", "baseline", "improved"]
+        if (results_root / category).exists()
         for dataset_dir in sorted((results_root / category).iterdir())
         if dataset_dir.is_dir()
         for exp_dir in sorted(dataset_dir.iterdir())
         if exp_dir.is_dir()
-        if (results_root / category).exists()
     ]
     exp_txt  = [f for ed in exp_dirs for f in sorted(ed.rglob("*.txt"))]
     all_txt  = top_txt + exp_txt

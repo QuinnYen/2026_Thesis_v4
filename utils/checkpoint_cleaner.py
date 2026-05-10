@@ -107,7 +107,9 @@ def _scan_dapt_optimizers(data_root: Path) -> tuple:
 
 def _scan_nul_file(project_root: Path) -> list:
     nul = project_root / "nul"
-    return [nul] if nul.exists() else []
+    # Windows 將 "nul" 視為保留裝置名稱，exists() 永遠回傳 True 但無法刪除
+    # 改用 is_file() 確認為實際檔案才納入清理清單
+    return [nul] if nul.is_file() else []
 
 
 def _do_delete(files: list, label: str) -> dict:
