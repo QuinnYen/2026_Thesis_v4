@@ -455,7 +455,7 @@ function renderDrink() {
         <span class="sec-label">請輸入飲品名稱</span>
         <input type="text" placeholder="例：燕麥奶拿鐵…"
           value="${state.customDrinkName}"
-          oninput="setProp('customDrinkName',this.value)" />
+          oninput="setInputVal('customDrinkName',this.value)" />
       </div>` : ''}
     <div class="btn-row" style="margin-top:1rem">
       <button class="btn-secondary" onclick="go('prof')">← 返回</button>
@@ -502,7 +502,7 @@ function renderCustomize() {
       <span class="sec-label">備註（選填）</span>
       <input type="text" placeholder="例：少甜一點…"
         value="${state.note}"
-        oninput="setProp('note',this.value)" />
+        oninput="setInputVal('note',this.value)" />
     </div>
     <div class="btn-row">
       <button class="btn-secondary" onclick="go('drink')">← 返回</button>
@@ -528,7 +528,7 @@ function renderLunch() {
       <span class="sec-label">午餐備註（選填）</span>
       <input type="text" placeholder="例：不吃香菜、過敏食材…"
         value="${state.lunchNote}"
-        oninput="setProp('lunchNote',this.value)" />
+        oninput="setInputVal('lunchNote',this.value)" />
     </div>
     ${errorBox()}
     <div class="btn-row">
@@ -561,7 +561,7 @@ function renderThesis() {
         <span class="sec-label">寄送地址</span>
         <input type="text" placeholder="請輸入完整寄送地址"
           value="${state.address}"
-          oninput="setProp('address',this.value)" />
+          oninput="setInputVal('address',this.value)" />
       </div>` : ''}
     ${errorBox()}
     <div class="btn-row">
@@ -628,7 +628,13 @@ function selectLunch(id) {
 
 function setProp(key, val) {
   state[key] = val;
+  // 只有非輸入框的狀態變更才重新 render
   render();
+}
+
+function setInputVal(key, val) {
+  // 直接更新 state 但不 render，避免輸入中斷
+  state[key] = val;
 }
 
 function resetForm() {
