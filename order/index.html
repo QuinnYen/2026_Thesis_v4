@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>點餐與論文</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&display=swap');
+
+  :root {
+    --green-dark: #1E3932;
+    --green:      #00704A;
+    --green-light:#E8F5EE;
+    --gold:       #CBA258;
+    --gold-light: #FDF6E9;
+    --bg:         #F2F9F5;
+    --white:      #ffffff;
+    --gray:       #888;
+    --border:     #d4e8dc;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Noto Serif TC', Georgia, serif;
+    min-height: 100vh;
+    background: linear-gradient(145deg, #1E3932 0%, #00704A 55%, #CBA258 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+  }
+
+  .card {
+    background: rgba(255,255,255,0.97);
+    border-radius: 22px;
+    padding: 2rem 1.75rem;
+    width: 100%;
+    max-width: 460px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.28);
+  }
+
+  /* ── Header ── */
+  .header {
+    text-align: center;
+    margin-bottom: 1.75rem;
+  }
+  .siren {
+    width: 52px; height: 52px;
+    background: var(--green);
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 0.5rem;
+    box-shadow: 0 4px 16px rgba(0,112,74,0.35);
+  }
+  .siren span { font-size: 1.6rem; }
+  .brand { font-size: 1.55rem; font-weight: 700; color: var(--green-dark); letter-spacing: .05em; }
+  .subtitle { color: var(--green); font-weight: 600; font-size: .92rem; margin-top: .2rem; }
+  .sub2 { color: var(--gray); font-size: .8rem; margin-top: .15rem; }
+
+  /* ── Professor buttons ── */
+  .prof-grid {
+    display: flex;
+    flex-direction: column;
+    gap: .65rem;
+    margin-bottom: 1.5rem;
+  }
+  .prof-btn {
+    width: 100%;
+    padding: .9rem 1rem;
+    border: 2px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg);
+    color: var(--green-dark);
+    font-family: inherit;
+    font-size: 1.05rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    transition: all .15s;
+  }
+  .prof-btn:hover { border-color: var(--green); background: var(--green-light); }
+  .prof-btn .avatar {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--green);
+    color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .95rem; font-weight: 700; flex-shrink: 0;
+  }
+
+  /* ── Section ── */
+  .section { margin-bottom: 1.25rem; }
+  .sec-label {
+    display: block;
+    color: var(--green-dark);
+    font-weight: 700;
+    font-size: .88rem;
+    letter-spacing: .04em;
+    margin-bottom: .5rem;
+  }
+
+  /* ── Category label ── */
+  .cat-label {
+    font-size: .75rem;
+    font-weight: 700;
+    color: var(--gold);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    border-bottom: 1px solid #f0ebe0;
+    padding-bottom: .25rem;
+    margin-bottom: .5rem;
+    margin-top: .75rem;
+  }
+
+  /* ── Drink grid ── */
+  .drink-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .45rem;
+  }
+  .drink-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: .7rem .4rem;
+    border: 2px solid #e8e4da;
+    border-radius: 12px;
+    background: var(--bg);
+    cursor: pointer;
+    gap: .15rem;
+    font-family: inherit;
+    transition: all .15s;
+  }
+  .drink-card:hover { border-color: var(--green); }
+  .drink-card.active {
+    border-color: var(--green);
+    background: var(--green-light);
+  }
+  .drink-card .emoji { font-size: 1.4rem; }
+  .drink-card .dname { font-size: .88rem; font-weight: 700; color: var(--green-dark); text-align: center; }
+  .drink-card .den   { font-size: .68rem; color: var(--gray); text-align: center; }
+
+  /* ── Lunch grid ── */
+  .lunch-grid {
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+  }
+  .lunch-card {
+    display: flex;
+    align-items: center;
+    padding: .85rem 1rem;
+    border: 2px solid #e8e4da;
+    border-radius: 12px;
+    background: var(--bg);
+    cursor: pointer;
+    gap: .75rem;
+    font-family: inherit;
+    transition: all .15s;
+  }
+  .lunch-card:hover { border-color: var(--green); }
+  .lunch-card.active { border-color: var(--green); background: var(--green-light); }
+  .lunch-card .lemoji { font-size: 1.5rem; flex-shrink: 0; }
+  .lunch-card .lname  { font-size: .95rem; font-weight: 700; color: var(--green-dark); }
+
+  /* ── Option pills ── */
+  .option-row { display: flex; gap: .4rem; flex-wrap: wrap; }
+  .pill {
+    padding: .4rem .85rem;
+    border: 2px solid var(--gold);
+    border-radius: 20px;
+    background: white;
+    color: #555;
+    font-family: inherit;
+    font-size: .85rem;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .pill.active {
+    border-color: var(--green);
+    background: var(--green);
+    color: white;
+    font-weight: 700;
+  }
+
+  /* ── Input ── */
+  input[type=text] {
+    width: 100%;
+    padding: .65rem .9rem;
+    border: 2px solid var(--gold);
+    border-radius: 10px;
+    font-size: .95rem;
+    font-family: inherit;
+    color: var(--green-dark);
+    background: var(--gold-light);
+    outline: none;
+  }
+
+  /* ── Buttons ── */
+  .btn-row { display: flex; gap: .65rem; margin-top: .75rem; }
+  .btn-primary {
+    flex: 1;
+    padding: .85rem;
+    background: var(--green);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: .98rem;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+    letter-spacing: .03em;
+    transition: opacity .15s;
+  }
+  .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+  .btn-secondary {
+    padding: .85rem 1.1rem;
+    background: white;
+    color: var(--green);
+    border: 2px solid var(--green);
+    border-radius: 12px;
+    font-size: .92rem;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  /* ── Progress dots ── */
+  .progress {
+    display: flex;
+    justify-content: center;
+    gap: .4rem;
+    margin-bottom: 1.5rem;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #ddd;
+    transition: background .2s;
+  }
+  .dot.active { background: var(--green); }
+  .dot.done   { background: var(--gold); }
+
+  /* ── Summary / Done ── */
+  .summary-card {
+    background: var(--green-light);
+    border: 1.5px solid var(--border);
+    border-radius: 14px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 1.25rem;
+  }
+  .summary-row { display: flex; justify-content: space-between; padding: .3rem 0; font-size: .9rem; color: var(--green-dark); }
+  .summary-row .key   { color: var(--gray); }
+  .summary-row .val   { font-weight: 700; }
+  .done-emoji { font-size: 3rem; text-align: center; margin: .5rem 0 1rem; }
+  .done-name  { text-align: center; font-size: 1.1rem; font-weight: 700; color: var(--green-dark); margin-bottom: 1.25rem; }
+
+  /* ── Admin view ── */
+  .order-card {
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: 12px;
+    padding: .9rem 1.1rem;
+    margin-bottom: .65rem;
+  }
+  .order-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .3rem; }
+  .order-prof { font-weight: 700; color: var(--green-dark); }
+  .order-time { font-size: .72rem; color: var(--gray); }
+  .order-drink { font-size: 1.05rem; font-weight: 700; color: var(--green); }
+  .order-lunch { font-size: .88rem; color: var(--green-dark); margin-top: .15rem; }
+  .tags { display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .4rem; }
+  .tag {
+    background: var(--green);
+    color: white;
+    padding: .18rem .6rem;
+    border-radius: 20px;
+    font-size: .75rem;
+    font-weight: 600;
+  }
+  .order-note { font-size: .82rem; color: var(--gray); font-style: italic; margin-top: .35rem; }
+
+  .empty { text-align: center; color: var(--gray); padding: 2rem 0; font-size: .95rem; }
+
+  .loading { text-align: center; color: var(--green); padding: 1.5rem 0; }
+
+  .error-msg {
+    background: #fff0f0;
+    border: 1.5px solid #f5c6c6;
+    border-radius: 10px;
+    color: #c0392b;
+    padding: .65rem 1rem;
+    font-size: .85rem;
+    margin-bottom: 1rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="card" id="app">
+  <div class="loading">載入中…</div>
+</div>
+
+<script>
+// ════════════════════════════════════════════
+//  ⚠️  請將下方兩行換成你的 Supabase 資訊
+// ════════════════════════════════════════════
+const SUPABASE_URL = 'https://mqeqluxojffbtjxwqpnx.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1xZXFsdXhvamZmYnRqeHdxcG54Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0NDA3NzMsImV4cCI6MjA5NDAxNjc3M30.mt2evkwTrmyvqql-nin_nDu2gsb1dz8Qc8oz0amZN2U';
+// ════════════════════════════════════════════
+
+const TABLE = 'orders';
+
+const PROFESSORS = [
+  { name: '洪智力', initial: '洪' },
+  { name: '蔡志豐', initial: '蔡' },
+  { name: '賴錦慧', initial: '賴' },
+];
+
+const DRINKS = [
+  { id:'latte',    name:'那堤',      en:'Caffè Latte',       cat:'咖啡', emoji:'☕' },
+  { id:'cap',      name:'卡布奇諾',  en:'Cappuccino',         cat:'咖啡', emoji:'☕' },
+  { id:'flat',     name:'馥列白',    en:'Flat White',         cat:'咖啡', emoji:'☕' },
+  { id:'cara',     name:'焦糖瑪奇朵',en:'Caramel Macchiato',  cat:'咖啡', emoji:'☕' },
+  { id:'mocha',    name:'摩卡',      en:'Caffè Mocha',        cat:'咖啡', emoji:'☕' },
+  { id:'ameri',    name:'美式咖啡',  en:'Caffè Americano',    cat:'咖啡', emoji:'☕' },
+  { id:'matcha',   name:'抹茶那堤',  en:'Matcha Latte',       cat:'茶飲', emoji:'🍵' },
+  { id:'earl',     name:'皇家伯爵茶那堤', en:'Earl Grey Latte',cat:'茶飲', emoji:'🍵' },
+  { id:'custom',   name:'自訂飲品',  en:'Custom Drink',       cat:'其他', emoji:'✏️' },
+];
+
+const LUNCHES = [
+  { id:'chicken', name:'蒜味胡椒雞胸', emoji:'🍗' },
+  { id:'beef',    name:'壽喜雪花牛',   emoji:'🥩' },
+  { id:'pork',    name:'檸檬椒鹽松阪豬', emoji:'🍖' },
+];
+
+const SIZES   = ['Tall','Grande','Venti'];
+const ICE_OPT = ['正常冰','少冰','去冰','熱'];
+const SU_OPT  = ['全糖','少糖','半糖','無糖'];
+
+// ── State ──
+let state = {
+  step: 'prof',   // prof | drink | customize | lunch | thesis | done
+  prof: null,
+  drink: null,
+  customDrinkName: '',
+  size: 'Grande',
+  ice: '正常冰',
+  sugar: '全糖',
+  lunch: null,
+  lunchNote: '',
+  note: '',
+  thesis: null,   // 'digital' | 'print'
+  address: '',
+  loading: false,
+  error: '',
+};
+
+// ── Supabase helpers ──
+async function dbInsert(row) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Prefer': 'return=minimal',
+    },
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) throw new Error(`送出失敗（${res.status}）`);
+}
+
+
+
+// ── Render ──
+function render() {
+  const app = document.getElementById('app');
+
+  switch (state.step) {
+    case 'prof':      app.innerHTML = renderProf();      break;
+    case 'drink':     app.innerHTML = renderDrink();     break;
+    case 'customize': app.innerHTML = renderCustomize(); break;
+    case 'lunch':     app.innerHTML = renderLunch();     break;
+    case 'thesis':    app.innerHTML = renderThesis();    break;
+    case 'done':      app.innerHTML = renderDone();      break;
+  }
+}
+
+function header(subtitle, sub2) {
+  return `
+    <div class="header">
+      <div class="siren"><span>✦</span></div>
+      <div class="brand">點餐與論文發送格式</div>
+      ${subtitle ? `<div class="subtitle">${subtitle}</div>` : ''}
+      ${sub2     ? `<div class="sub2">${sub2}</div>` : ''}
+    </div>`;
+}
+
+function progress(cur) {  // 1=drink 2=customize 3=lunch 4=thesis
+  return `<div class="progress">
+    ${[1,2,3,4].map(i =>
+      `<div class="dot ${i < cur ? 'done' : i === cur ? 'active' : ''}"></div>`
+    ).join('')}
+  </div>`;
+}
+
+function errorBox() {
+  return state.error
+    ? `<div class="error-msg">⚠️ ${state.error}</div>`
+    : '';
+}
+
+// Step 1：選教授
+function renderProf() {
+  return `
+    ${header('口試委員專屬點餐', '顏寬 敬上')}
+    <div class="prof-grid">
+      ${PROFESSORS.map(p => `
+        <button class="prof-btn" onclick="selectProf('${p.name}')">
+          <div class="avatar">${p.initial}</div>
+          <span>${p.name} 教授</span>
+        </button>
+      `).join('')}
+    </div>`;
+}
+
+// Step 2：選飲料
+function renderDrink() {
+  const cats = [...new Set(DRINKS.map(d => d.cat))];
+  return `
+    ${header(`${state.prof} 教授`, '步驟 1／4　選擇飲料')}
+    ${progress(1)}
+    ${cats.map(cat => `
+      <div class="cat-label">${cat}</div>
+      <div class="drink-grid">
+        ${DRINKS.filter(d => d.cat === cat).map(d => `
+          <button class="drink-card ${state.drink === d.id ? 'active' : ''}"
+            onclick="selectDrink('${d.id}')">
+            <span class="emoji">${d.emoji}</span>
+            <span class="dname">${d.name}</span>
+            <span class="den">${d.en}</span>
+          </button>
+        `).join('')}
+      </div>
+    `).join('')}
+    ${state.drink === 'custom' ? `
+      <div class="section" style="margin-top:.75rem">
+        <span class="sec-label">請輸入飲品名稱</span>
+        <input type="text" placeholder="例：燕麥奶拿鐵…"
+          value="${state.customDrinkName}"
+          oninput="setInputVal('customDrinkName',this.value)" />
+      </div>` : ''}
+    <div class="btn-row" style="margin-top:1rem">
+      <button class="btn-secondary" onclick="go('prof')">← 返回</button>
+      <button class="btn-primary"
+        ${(!state.drink || (state.drink==='custom' && !state.customDrinkName.trim())) ? 'disabled' : ''}
+        onclick="go('customize')">下一步 →</button>
+    </div>`;
+}
+
+// Step 3：杯型冰糖備註
+function renderCustomize() {
+  const d = DRINKS.find(x => x.id === state.drink);
+  return `
+    ${header(`${state.prof} 教授`, `步驟 2／4　${d.name === '自訂飲品' ? state.customDrinkName : d.name} 客製化`)}
+    ${progress(2)}
+    <div class="section">
+      <span class="sec-label">杯型</span>
+      <div class="option-row">
+        ${SIZES.map(s => `
+          <button class="pill ${state.size === s ? 'active' : ''}"
+            onclick="setProp('size','${s}')">${s}</button>
+        `).join('')}
+      </div>
+    </div>
+    <div class="section">
+      <span class="sec-label">冰量 / 溫度</span>
+      <div class="option-row">
+        ${ICE_OPT.map(o => `
+          <button class="pill ${state.ice === o ? 'active' : ''}"
+            onclick="setProp('ice','${o}')">${o}</button>
+        `).join('')}
+      </div>
+    </div>
+    <div class="section">
+      <span class="sec-label">甜度</span>
+      <div class="option-row">
+        ${SU_OPT.map(o => `
+          <button class="pill ${state.sugar === o ? 'active' : ''}"
+            onclick="setProp('sugar','${o}')">${o}</button>
+        `).join('')}
+      </div>
+    </div>
+    <div class="section">
+      <span class="sec-label">備註（選填）</span>
+      <input type="text" placeholder="例：少甜一點…"
+        value="${state.note}"
+        oninput="setInputVal('note',this.value)" />
+    </div>
+    <div class="btn-row">
+      <button class="btn-secondary" onclick="go('drink')">← 返回</button>
+      <button class="btn-primary" onclick="go('lunch')">下一步 →</button>
+    </div>`;
+}
+
+// Step 4：選午餐
+function renderLunch() {
+  return `
+    ${header(`${state.prof} 教授`, '步驟 3／4　選擇午餐')}
+    ${progress(3)}
+    <div class="lunch-grid" style="margin-bottom:1rem">
+      ${LUNCHES.map(l => `
+        <button class="lunch-card ${state.lunch === l.id ? 'active' : ''}"
+          onclick="selectLunch('${l.id}')">
+          <span class="lemoji">${l.emoji}</span>
+          <span class="lname">${l.name}</span>
+        </button>
+      `).join('')}
+    </div>
+    <div class="section">
+      <span class="sec-label">午餐備註（選填）</span>
+      <input type="text" placeholder="例：不吃香菜、過敏食材…"
+        value="${state.lunchNote}"
+        oninput="setInputVal('lunchNote',this.value)" />
+    </div>
+    ${errorBox()}
+    <div class="btn-row">
+      <button class="btn-secondary" onclick="go('customize')">← 返回</button>
+      <button class="btn-primary"
+        ${(!state.lunch || state.loading) ? 'disabled' : ''}
+        onclick="go('thesis')">下一步 →</button>
+    </div>`;
+}
+
+// Step 5：論文發送方式
+function renderThesis() {
+  return `
+    ${header(`${state.prof} 教授`, '步驟 4／4　論文發送方式')}
+    ${progress(4)}
+    <div class="lunch-grid" style="margin-bottom:1rem">
+      <button class="lunch-card ${state.thesis === 'digital' ? 'active' : ''}"
+        onclick="setProp('thesis','digital')">
+        <span class="lemoji">💻</span>
+        <span class="lname">電子檔即可</span>
+      </button>
+      <button class="lunch-card ${state.thesis === 'print' ? 'active' : ''}"
+        onclick="setProp('thesis','print')">
+        <span class="lemoji">📖</span>
+        <span class="lname">需要紙本</span>
+      </button>
+    </div>
+    ${state.thesis === 'print' ? `
+      <div class="section">
+        <span class="sec-label">寄送地址</span>
+        <input type="text" placeholder="請輸入完整寄送地址"
+          value="${state.address}"
+          oninput="setInputVal('address',this.value)" />
+      </div>` : ''}
+    ${errorBox()}
+    <div class="btn-row">
+      <button class="btn-secondary" onclick="go('lunch')">← 返回</button>
+      <button class="btn-primary"
+        ${(!state.thesis || (state.thesis==='print' && !state.address.trim()) || state.loading) ? 'disabled' : ''}
+        onclick="submitOrder()">
+        ${state.loading ? '送出中…' : '確認送出 ✓'}
+      </button>
+    </div>`;
+}
+
+// Done
+function renderDone() {
+  const d = DRINKS.find(x => x.id === state.drink);
+  const l = LUNCHES.find(x => x.id === state.lunch);
+  const drinkName = state.drink === 'custom' ? state.customDrinkName : d.name;
+  return `
+    ${header('感謝您的填寫！')}
+    <div class="done-emoji">🎉</div>
+    <div class="done-name">我們已收到 ${state.prof} 教授的回覆</div>
+    <div class="summary-card">
+      <div class="summary-row"><span class="key">飲料</span><span class="val">${drinkName}</span></div>
+      <div class="summary-row"><span class="key">杯型</span><span class="val">${state.size}</span></div>
+      <div class="summary-row"><span class="key">冰量</span><span class="val">${state.ice}</span></div>
+      <div class="summary-row"><span class="key">甜度</span><span class="val">${state.sugar}</span></div>
+      ${state.note ? `<div class="summary-row"><span class="key">飲料備註</span><span class="val">${state.note}</span></div>` : ''}
+      <div class="summary-row"><span class="key">午餐</span><span class="val">${l.name}</span></div>
+      ${state.lunchNote ? `<div class="summary-row"><span class="key">午餐備註</span><span class="val">${state.lunchNote}</span></div>` : ''}
+      <div class="summary-row"><span class="key">論文</span><span class="val">${state.thesis === 'digital' ? '電子檔' : '紙本'}</span></div>
+      ${state.thesis === 'print' ? `<div class="summary-row"><span class="key">地址</span><span class="val">${state.address}</span></div>` : ''}
+    </div>
+    <p style="text-align:center;color:var(--gray);font-size:.85rem;margin-bottom:1rem;">如需修改，請重新填寫一次即可，<br>我們將以最後一筆紀錄為準。</p>
+    <p style="text-align:center;color:var(--green-dark);font-size:.88rem;font-weight:600;">感謝您撥冗填寫，期待口試當天與您相見！</p>`;
+}
+
+// ── Actions ──
+function go(step) {
+  state.step = step;
+  state.error = '';
+  render();
+}
+
+function selectProf(name) {
+  state.prof  = name;
+  state.drink = null;
+  state.lunch = null;
+  state.note  = '';
+  state.size  = 'Grande';
+  state.ice   = '正常冰';
+  state.sugar = '全糖';
+  go('drink');
+}
+
+function selectDrink(id) {
+  state.drink = id;
+  render();
+}
+
+function selectLunch(id) {
+  state.lunch = id;
+  render();
+}
+
+function setProp(key, val) {
+  state[key] = val;
+  // 只有非輸入框的狀態變更才重新 render
+  render();
+}
+
+function setInputVal(key, val) {
+  // 直接更新 state 但不 render，避免輸入中斷
+  state[key] = val;
+}
+
+function resetForm() {
+  state = { ...state, step:'prof', prof:null, drink:null, customDrinkName:'',
+    lunch:null, lunchNote:'', note:'', size:'Grande', ice:'正常冰', sugar:'全糖',
+    thesis:null, address:'', error:'' };
+  render();
+}
+
+async function submitOrder() {
+  if (!state.thesis) return;
+  if (state.thesis === 'print' && !state.address.trim()) return;
+  state.loading = true;
+  state.error = '';
+  render();
+  const drinkName = state.drink === 'custom' ? state.customDrinkName : state.drink;
+  try {
+    await dbInsert({
+      professor:  state.prof,
+      drink:      drinkName,
+      size:       state.size,
+      ice:        state.ice,
+      sugar:      state.sugar,
+      lunch:      state.lunch,
+      note:       state.note + (state.lunchNote ? `｜午餐備註：${state.lunchNote}` : ''),
+      thesis:     state.thesis,
+      address:    state.address,
+    });
+    state.loading = false;
+    go('done');
+  } catch (e) {
+    state.loading = false;
+    state.error = e.message || '送出失敗，請稍後再試';
+    render();
+  }
+}
+
+// ── Init ──
+render();
+</script>
+</body>
+</html>
