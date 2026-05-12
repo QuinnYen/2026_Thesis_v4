@@ -1303,7 +1303,6 @@ def create_improved_model(model_type, args, num_classes=3):
             dropout=dropout,
             freeze_bert=getattr(args, 'freeze_bert', False),
             num_gat_heads=getattr(args, 'gat_heads', 4),
-            num_gat_layers=getattr(args, 'gat_layers', 2),
             knowledge_weight=getattr(args, 'knowledge_weight', 0.1),
             use_senticnet=getattr(args, 'use_senticnet', True),
             # v2.0 新增：解決 Neutral 識別問題

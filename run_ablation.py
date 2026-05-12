@@ -1,62 +1,35 @@
 """
 消融實驗執行腳本
 
-注意：下方命令請「照原樣」複製貼上。
-      有些參數是選填的，會用「# 可加」標示，需要時再自行補上。
+注意:下方命令請"照原樣"複製貼上.
+      有些參數是選填的,會用"# 可加"標示,需要時再自行補上.
 
 ════════════════════════════════════════════════════════════════
- 消融設計總覽（6 個變體，統一超參，epochs=40，patience=12）
+ 消融設計總覽(6 個變體,統一超參,epochs=40,patience=12)
 ════════════════════════════════════════════════════════════════
-  消融基準（ablation_full）：統一超參的完整 HKGAN，計算 delta 分母
-  注意：ablation_full 與主實驗（unified_hkgan.yaml）設定不同（無 per-dataset
-        routing），F1 略低，但消融 delta 更準確反映各組件獨立貢獻。
+  消融基準(ablation_full):統一超參的完整 HKGAN,計算 delta 分母
+  注意:ablation_full 與主實驗(unified_hkgan.yaml)設定不同(無 per-dataset
+        routing),F1 略低,但消融 delta 更準確反映各組件獨立貢獻.
 
-  [Base]  full              - HKGAN Full（統一超參，消融基準線）
-  [Tier1] bert_only         - BERT-only Baseline（移除所有創新組件）
-  [Tier1] no_all_knowledge  - 移除整個知識增強模組（SenticNet + Gates）
+  [Base]  full              - HKGAN Full(統一超參,消融基準線)
+  [Tier1] bert_only         - BERT-only Baseline(移除所有創新組件)
+  [Tier1] no_all_knowledge  - 移除整個知識增強模組(SenticNet + Gates)
   [Tier1] no_inter_aspect   - 移除 Inter-Aspect 多面向處理模組
-  [Tier2] no_all_loss_eng   - 移除所有損失函數工程（Focal + class_weights）
-  [Tier2] no_knowledge_gating - 移除知識門控（Confidence + Dynamic Gate）
+  [Tier2] no_all_loss_eng   - 移除所有損失函數工程(Focal + class_weights)
+  [Tier2] no_knowledge_gating - 移除知識門控(Confidence + Dynamic Gate)
 
 ════════════════════════════════════════════════════════════════
- 單一資料集 ── 全變體
+ 完整消融研究(6 變體 x 5 資料集 x 5 種子,跑完自動清理)
 ════════════════════════════════════════════════════════════════
-  python run_ablation.py --all --dataset restaurants
-  python run_ablation.py --all --dataset laptops
-  python run_ablation.py --all --dataset mams
-  python run_ablation.py --all --dataset rest16
-  python run_ablation.py --all --dataset lap16
-
-  # 想跑 5 個種子？在結尾加上 --multi-seed，例如：
-  python run_ablation.py --all --dataset restaurants --multi-seed
-
-════════════════════════════════════════════════════════════════
- 單一資料集 ── 指定變體
-════════════════════════════════════════════════════════════════
-  python run_ablation.py --all --dataset rest16 --variants bert_only no_all_knowledge
-  python run_ablation.py --all --dataset rest16 --variants bert_only --multi-seed
-
-════════════════════════════════════════════════════════════════
- 完整消融研究（所有變體 × 5 資料集）
-════════════════════════════════════════════════════════════════
-  # 6 變體 × 5 資料集（單 seed）
-  python run_ablation.py --full-study
-
-  # 6 變體 × 5 資料集 × 5 種子（共 150 次訓練）
-  python run_ablation.py --full-study --multi-seed
-
-  # 跑完自動清理多餘 checkpoint（強烈建議加）
   python run_ablation.py --full-study --multi-seed --auto-cleanup
+  # 含消融總結報告(results/ablation/ablation_summary.txt)會隨訓練自動生成
 
 ════════════════════════════════════════════════════════════════
- 只生成報告（不重新訓練）
+ 其他工具(按需使用)
 ════════════════════════════════════════════════════════════════
-  # 跨資料集總結報告（所有變體 × 所有資料集，輸出至 results/ablation/ablation_summary.txt）
+  # 只生成跨資料集總結報告(不重新訓練)
   python run_ablation.py --summary-only
 
-════════════════════════════════════════════════════════════════
- 工具
-════════════════════════════════════════════════════════════════
   # 列出所有可用消融變體及 config 是否存在
   python run_ablation.py --list
 """
@@ -73,12 +46,12 @@ from utils.checkpoint_cleaner import run_cleanup, print_cleanup_summary
 # =============================================================================
 # 消融變體配置
 # =============================================================================
-# 分層設計：
-#   Tier 1: 核心架構消融（預期差異 5-15%）- 驗證主要創新貢獻
-#   Tier 2: 組件組合消融（預期差異 2-8%）- 驗證輔助機制價值
+# 分層設計:
+#   Tier 1: 核心架構消融(預期差異 5-15%)- 驗證主要創新貢獻
+#   Tier 2: 組件組合消融(預期差異 2-8%)- 驗證輔助機制價值
 
 ABLATION_CONFIGS = {
-    # === 消融基準（統一超參 full model）===
+    # === 消融基準(統一超參 full model)===
     'full': 'configs/ablation/ablation_full.yaml',
 
     # === Tier 1: 核心架構消融 ===
@@ -94,7 +67,7 @@ ABLATION_CONFIGS = {
 # 消融變體的中文描述
 ABLATION_DESCRIPTIONS = {
     # === 消融基準 ===
-    'full': '[Base] HKGAN Full（統一超參，消融基準線）',
+    'full': '[Base] HKGAN Full(統一超參,消融基準線)',
 
     # === Tier 1: 核心架構消融 ===
     'bert_only': '[Tier1] BERT-only Baseline (移除所有創新組件)',
@@ -112,7 +85,7 @@ MULTI_SEED_LIST = [42, 123, 2023, 999, 0]
 # 所有支援的資料集
 ALL_DATASETS = ['restaurants', 'laptops', 'mams', 'rest16', 'lap16']
 
-# 資料集顯示名稱對映（用於報告輸出）
+# 資料集顯示名稱對映(用於報告輸出)
 DATASET_DISPLAY_NAMES = {
     'restaurants': 'Rest14',
     'laptops':     'Lap14',
@@ -121,10 +94,10 @@ DATASET_DISPLAY_NAMES = {
     'lap16':       'Lap16',
 }
 
-# 消融實驗執行順序（按重要性）
-# full 必須排第一，作為消融基準；delta = full - 各消融變體
+# 消融實驗執行順序(按重要性)
+# full 必須排第一,作為消融基準;delta = full - 各消融變體
 ABLATION_ORDER = [
-    # 消融基準（統一超參 full model，delta 計算的分子）
+    # 消融基準(統一超參 full model,delta 計算的分子)
     'full',
     # Tier 1: 核心架構
     'bert_only',           # BERT-only baseline
@@ -142,7 +115,7 @@ def run_ablation_experiment(ablation_type, dataset, seed_override=None):
     Args:
         ablation_type: 消融變體名稱
         dataset: 資料集名稱
-        seed_override: 覆蓋配置文件中的 seed（用於多種子實驗）
+        seed_override: 覆蓋配置文件中的 seed(用於多種子實驗)
 
     Returns:
         bool: 是否成功
@@ -163,7 +136,7 @@ def run_ablation_experiment(ablation_type, dataset, seed_override=None):
         "--dataset", dataset
     ]
 
-    # 如果指定了 seed_override，通過 --override 傳遞
+    # 如果指定了 seed_override,通過 --override 傳遞
     if seed_override is not None:
         cmd.extend(["--override", "--seed", str(seed_override)])
 
@@ -246,7 +219,7 @@ def run_multi_seed_ablation(ablation_type, dataset):
 def get_latest_experiment_result(results_dir, ablation_type):
     """獲取最新實驗的測試結果
 
-    所有消融變體（包含 bert_only）結果統一存在 results/ablation/{dataset}/ 下。
+    所有消融變體(包含 bert_only)結果統一存在 results/ablation/{dataset}/ 下.
     """
     search_dir = results_dir
 
@@ -258,7 +231,7 @@ def get_latest_experiment_result(results_dir, ablation_type):
     exp_dirs = sorted(search_dir.glob(exp_pattern), key=lambda x: x.stat().st_mtime, reverse=True)
 
     if not exp_dirs:
-        # 如果找不到特定模式，嘗試找最新的
+        # 如果找不到特定模式,嘗試找最新的
         exp_dirs = sorted(search_dir.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True)
 
     if not exp_dirs:
@@ -272,7 +245,7 @@ def get_latest_experiment_result(results_dir, ablation_type):
             with open(result_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 metrics = data.get('test_metrics', {})
-                # 附帶回傳 grid search 結果（頂層欄位）
+                # 附帶回傳 grid search 結果(頂層欄位)
                 metrics['_logit_adj'] = data.get('logit_adj_grid_search', {})
                 return metrics
         except Exception:
@@ -389,12 +362,12 @@ def generate_multi_seed_ablation_report(ablation_type, dataset, results):
 
 
 def run_all_ablations(dataset, multi_seed=False, variants=None):
-    """執行所有（或指定的）消融實驗（單一資料集）
+    """執行所有(或指定的)消融實驗(單一資料集)
 
     Args:
         dataset: 資料集名稱
         multi_seed: 是否執行多種子實驗
-        variants: 指定要跑的變體列表（None = 全部依 ABLATION_ORDER）
+        variants: 指定要跑的變體列表(None = 全部依 ABLATION_ORDER)
     """
     order = variants if variants else ABLATION_ORDER
 
@@ -432,7 +405,7 @@ def run_all_ablations(dataset, multi_seed=False, variants=None):
 
 
 def run_full_study(multi_seed=False):
-    """執行完整消融研究（所有變體 × 所有資料集）
+    """執行完整消融研究(所有變體 x 所有資料集)
 
     Args:
         multi_seed: 是否執行多種子實驗
@@ -468,10 +441,10 @@ def run_full_study(multi_seed=False):
 
 
 def _get_ablation_full_f1(dataset):
-    """從 ablation full model 的多種子 JSON 讀取 Macro-F1 均值，作為消融基準。
+    """從 ablation full model 的多種子 JSON 讀取 Macro-F1 均值,作為消融基準.
 
-    消融 delta = ablation_full - 各消融變體（統一超參下的差值）。
-    若尚未跑 ablation full，回傳 0.0（delta 顯示 N/A）。
+    消融 delta = ablation_full - 各消融變體(統一超參下的差值).
+    若尚未跑 ablation full,回傳 0.0(delta 顯示 N/A).
     """
     json_file = Path("results/ablation") / dataset / f"ablation_full_{dataset}.json"
     if json_file.exists():
@@ -481,7 +454,7 @@ def _get_ablation_full_f1(dataset):
         except Exception:
             pass
 
-    # fallback：從單次 experiment_results.json 讀取（若 multi-seed 尚未跑完）
+    # fallback:從單次 experiment_results.json 讀取(若 multi-seed 尚未跑完)
     ablation_dir = Path("results/ablation") / dataset
     if ablation_dir.exists():
         for exp_dir in sorted(ablation_dir.glob("*ablation_full*"), key=lambda x: x.stat().st_mtime, reverse=True):
@@ -496,11 +469,11 @@ def _get_ablation_full_f1(dataset):
 
 
 def generate_ablation_summary_report():
-    """生成消融實驗總結報告（從已有的 JSON 結果）
+    """生成消融實驗總結報告(從已有的 JSON 結果)
 
-    支援兩種格式：
+    支援兩種格式:
     1. 多種子彙總報告: ablation_{type}_{dataset}.json
-    2. 單次實驗結果: experiment_results.json（目錄名含 ablation_{type}）
+    2. 單次實驗結果: experiment_results.json(目錄名含 ablation_{type})
     """
     reports_dir = Path("results/ablation")
     if not reports_dir.exists():
@@ -534,7 +507,7 @@ def generate_ablation_summary_report():
         except Exception as e:
             print(f"警告: 無法讀取多種子報告 {json_file}: {e}")
 
-    # 方法 2: 搜尋單次實驗結果 (experiment_results.json)，統一從 ablation/ 搜尋
+    # 方法 2: 搜尋單次實驗結果 (experiment_results.json),統一從 ablation/ 搜尋
     for json_file in reports_dir.glob("**/experiment_results.json"):
         try:
             # 從目錄名解析消融類型和資料集
@@ -555,7 +528,7 @@ def generate_ablation_summary_report():
             if not ablation_type or dataset not in ALL_DATASETS:
                 continue
 
-            # 如果已有多種子結果，跳過單次結果
+            # 如果已有多種子結果,跳過單次結果
             if dataset in all_results and ablation_type in all_results[dataset]:
                 continue
 
@@ -569,7 +542,7 @@ def generate_ablation_summary_report():
                 if dataset not in all_results:
                     all_results[dataset] = {}
 
-                # 單次實驗沒有 std，設為 0
+                # 單次實驗沒有 std,設為 0
                 f1_per_class = test_metrics.get('f1_per_class', [0, 0, 0])
                 neu_f1 = f1_per_class[1] * 100 if len(f1_per_class) > 1 else 0
 
@@ -629,10 +602,10 @@ def generate_ablation_summary_report():
 
     report.append("=" * 100)
     report.append("說明:")
-    report.append("  - Delta F1: 相對於消融基準（ablation_full，統一超參 HKGAN full model）的 Macro-F1 變化")
-    report.append("  - 負值表示移除該組件後性能下降（該組件有正面貢獻）")
-    report.append("  - 注意：ablation_full 與主實驗（unified_hkgan.yaml）設定不同（無 per-dataset routing），")
-    report.append("    ablation_full F1 略低於主實驗，但消融 delta 更準確反映各組件的獨立貢獻。")
+    report.append("  - Delta F1: 相對於消融基準(ablation_full,統一超參 HKGAN full model)的 Macro-F1 變化")
+    report.append("  - 負值表示移除該組件後性能下降(該組件有正面貢獻)")
+    report.append("  - 注意:ablation_full 與主實驗(unified_hkgan.yaml)設定不同(無 per-dataset routing),")
+    report.append("    ablation_full F1 略低於主實驗,但消融 delta 更準確反映各組件的獨立貢獻.")
     report.append("=" * 100)
 
     report_text = "\n".join(report)
@@ -647,10 +620,10 @@ def generate_ablation_summary_report():
 def list_ablations():
     """列出所有可用的消融變體"""
     print("\n可用的消融變體 (共 6 個):")
-    print("  消融 delta = ablation_full - 各消融變體（統一超參基準）")
+    print("  消融 delta = ablation_full - 各消融變體(統一超參基準)")
     print("=" * 70)
 
-    print("\n[Base] 消融基準（統一超參 Full Model）:")
+    print("\n[Base] 消融基準(統一超參 Full Model):")
     print("-" * 70)
     for ablation_type in ['full']:
         config = ABLATION_CONFIGS.get(ablation_type, 'N/A')
@@ -658,7 +631,7 @@ def list_ablations():
         exists = "[O]" if Path(config).exists() else "[X]"
         print(f"  {exists} {ablation_type:<20s}: {desc}")
 
-    print("\n[Tier 1] 核心架構消融（預期差異 5-15%）:")
+    print("\n[Tier 1] 核心架構消融(預期差異 5-15%):")
     print("-" * 70)
     tier1 = ['bert_only', 'no_all_knowledge', 'no_inter_aspect']
     for ablation_type in tier1:
@@ -667,7 +640,7 @@ def list_ablations():
         exists = "[O]" if Path(config).exists() else "[X]"
         print(f"  {exists} {ablation_type:<20s}: {desc}")
 
-    print("\n[Tier 2] 組件組合消融（預期差異 2-8%）:")
+    print("\n[Tier 2] 組件組合消融(預期差異 2-8%):")
     print("-" * 70)
     tier2 = ['no_all_loss_eng', 'no_knowledge_gating']
     for ablation_type in tier2:
@@ -685,19 +658,19 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 範例:
-    # 執行所有消融實驗（單一資料集）
+    # 執行所有消融實驗(單一資料集)
     python run_ablation.py --all --dataset restaurants
 
-    # 執行多種子消融實驗（驗證穩定性）
+    # 執行多種子消融實驗(驗證穩定性)
     python run_ablation.py --all --dataset restaurants --multi-seed
 
-    # 只跑指定變體（多 seed）
+    # 只跑指定變體(多 seed)
     python run_ablation.py --all --dataset rest16 --variants bert_only --multi-seed
 
-    # 執行完整消融研究（所有變體 × 所有資料集）
+    # 執行完整消融研究(所有變體 x 所有資料集)
     python run_ablation.py --full-study
 
-    # 只生成跨資料集總結報告（不重新訓練）
+    # 只生成跨資料集總結報告(不重新訓練)
     python run_ablation.py --summary-only
 
     # 列出所有可用的消融變體
@@ -713,17 +686,17 @@ def main():
     parser.add_argument('--variants', nargs='+',
                         choices=list(ABLATION_CONFIGS.keys()),
                         metavar='VARIANT',
-                        help=f'指定要執行的變體（預設：全部）。可選：{list(ABLATION_CONFIGS.keys())}')
+                        help=f'指定要執行的變體(預設:全部).可選:{list(ABLATION_CONFIGS.keys())}')
     parser.add_argument('--all', action='store_true',
-                        help='執行所有消融變體（需指定 --dataset）')
+                        help='執行所有消融變體(需指定 --dataset)')
     parser.add_argument('--full-study', action='store_true',
-                        help='執行完整消融研究（所有變體 × 所有資料集）')
+                        help='執行完整消融研究(所有變體 x 所有資料集)')
     parser.add_argument('--summary-only', action='store_true',
-                        help='只生成跨資料集消融總結報告（不執行實驗），輸出至 results/ablation/ablation_summary.txt')
+                        help='只生成跨資料集消融總結報告(不執行實驗),輸出至 results/ablation/ablation_summary.txt')
     parser.add_argument('--list', action='store_true',
                         help='列出所有可用的消融變體')
     parser.add_argument('--auto-cleanup', action='store_true',
-                        help='實驗結束後自動刪除多餘的中間 checkpoint（保留每個實驗 F1 最高的）')
+                        help='實驗結束後自動刪除多餘的中間 checkpoint(保留每個實驗 F1 最高的)')
 
     args = parser.parse_args()
 
@@ -752,10 +725,10 @@ def main():
 
 
 def _maybe_cleanup(auto_cleanup: bool) -> None:
-    """實驗完成後觸發 checkpoint 清理。"""
+    """實驗完成後觸發 checkpoint 清理."""
     if not auto_cleanup:
         return
-    print("\n[自動清理] 實驗結束，開始清理多餘 checkpoint...")
+    print("\n[自動清理] 實驗結束,開始清理多餘 checkpoint...")
     summary = run_cleanup(execute=True)
     print_cleanup_summary(summary)
 

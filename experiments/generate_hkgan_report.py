@@ -240,6 +240,41 @@ def read_metrics(exp_dir):
     return metrics
 
 
+def _fmt_cm_row(cm_row):
+    """將混淆矩陣一列格式化，支援整數或浮點數。"""
+    def fmt(v):
+        return f"{v:.1f}" if isinstance(v, float) else f"{int(v)}"
+    return [fmt(v) for v in cm_row]
+
+
+def _cm_stats(cm):
+    """回傳 (recall_list, precision_list)，各含 3 個百分比值。"""
+    totals = [sum(cm[i]) for i in range(3)]
+    pred_totals = [sum(cm[i][j] for i in range(3)) for j in range(3)]
+    recall    = [cm[i][i] / totals[i] * 100 if totals[i] > 0 else 0.0 for i in range(3)]
+    precision = [cm[i][i] / pred_totals[i] * 100 if pred_totals[i] > 0 else 0.0 for i in range(3)]
+    return recall, precision
+
+
+def _append_cm_block(report, label, cm, n_seeds):
+    """輸出單個模型的混淆矩陣區塊。"""
+    seed_note = f" ({n_seeds}-seed 累積)" if n_seeds and n_seeds > 1 else ""
+    report.append(f"{label}{seed_note}:")
+    header = f"  {'':10}  {'Pred Neg':>10}  {'Pred Neu':>10}  {'Pred Pos':>10}"
+    report.append(header)
+    report.append(f"  {'-'*43}")
+    labels = ['Neg', 'Neu', 'Pos']
+    col_w = 10
+    for i, row_label in enumerate(labels):
+        row = _fmt_cm_row(cm[i])
+        report.append(f"  {'True '+row_label:<10}  {row[0]:>{col_w}}  {row[1]:>{col_w}}  {row[2]:>{col_w}}")
+    recall, precision = _cm_stats(cm)
+    report.append(f"  {'-'*43}")
+    report.append(f"  {'Recall':<10}  {recall[0]:>9.1f}%  {recall[1]:>9.1f}%  {recall[2]:>9.1f}%")
+    report.append(f"  {'Precision':<10}  {precision[0]:>9.1f}%  {precision[1]:>9.1f}%  {precision[2]:>9.1f}%")
+    report.append("")
+
+
 def generate_report(dataset, baseline_metrics, hkgan_metrics):
     """生成對比報告"""
     display_name = get_display_name(dataset)
@@ -268,11 +303,10 @@ def generate_report(dataset, baseline_metrics, hkgan_metrics):
     report.append("-" * 80)
     report.append("實驗結果 (Main Results)")
     report.append("-" * 80)
-    report.append(f"{'Model':<20} {'Acc (%)':>12} {'Macro-F1 (%)':>14} {'AUC (%)':>12} {'Best Epoch':>12}")
+    report.append(f"{'Model':<20} {'Acc (%)':>12} {'Macro-F1 (%)':>18} {'AUC (%)':>12} {'Best Epoch':>12}")
     report.append("-" * 80)
 
     def fmt_f1(m):
-        """格式化 F1，若有 std 則顯示 Mean±Std。"""
         if m is None or m.get('test_f1') is None:
             return "N/A"
         v = m['test_f1'] * 100
@@ -280,30 +314,20 @@ def generate_report(dataset, baseline_metrics, hkgan_metrics):
         n = m.get('n_seeds', 1)
         return f"{v:.2f}±{std*100:.2f}" if n > 1 else f"{v:.2f}"
 
-    # Baseline
-    if baseline_metrics and baseline_metrics.get('test_acc') is not None:
-        n_b = baseline_metrics.get('n_seeds', 1)
-        n_tag = f" ({n_b}-seed mean)" if n_b > 1 else ""
-        acc = f"{baseline_metrics['test_acc']*100:.2f}"
-        f1  = fmt_f1(baseline_metrics)
-        auc = f"{baseline_metrics['test_auc_macro']*100:.2f}" if baseline_metrics.get('test_auc_macro') else "N/A"
-        epoch = f"{baseline_metrics.get('best_epoch', 'N/A')}"
-        report.append(f"{'Baseline (BERT-CLS)':<20} {acc:>12} {f1:>18} {auc:>12} {epoch:>12}{n_tag}")
-    else:
-        report.append(f"{'Baseline (BERT-CLS)':<20} {'N/A':>12} {'N/A':>18} {'N/A':>12} {'N/A':>12}")
+    def fmt_row(label, m):
+        if m and m.get('test_acc') is not None:
+            n = m.get('n_seeds', 1)
+            n_tag = f" ({n}-seed mean)" if n > 1 else ""
+            acc   = f"{m['test_acc']*100:.2f}"
+            f1    = fmt_f1(m)
+            auc   = f"{m['test_auc_macro']*100:.2f}" if m.get('test_auc_macro') else "N/A"
+            epoch = str(m.get('best_epoch', 'N/A'))
+            report.append(f"{label:<20} {acc:>12} {f1:>18} {auc:>12} {epoch:>12}{n_tag}")
+        else:
+            report.append(f"{label:<20} {'N/A':>12} {'N/A':>18} {'N/A':>12} {'N/A':>12}")
 
-    # HKGAN
-    if hkgan_metrics and hkgan_metrics.get('test_acc') is not None:
-        n_h = hkgan_metrics.get('n_seeds', 1)
-        n_tag = f" ({n_h}-seed mean)" if n_h > 1 else ""
-        acc = f"{hkgan_metrics['test_acc']*100:.2f}"
-        f1  = fmt_f1(hkgan_metrics)
-        auc = f"{hkgan_metrics['test_auc_macro']*100:.2f}" if hkgan_metrics.get('test_auc_macro') else "N/A"
-        epoch = f"{hkgan_metrics.get('best_epoch', 'N/A')}"
-        report.append(f"{'HKGAN (Ours)':<20} {acc:>12} {f1:>18} {auc:>12} {epoch:>12}{n_tag}")
-    else:
-        report.append(f"{'HKGAN (Ours)':<20} {'N/A':>12} {'N/A':>18} {'N/A':>12} {'N/A':>12}")
-
+    fmt_row("Baseline (BERT-CLS)", baseline_metrics)
+    fmt_row("HKGAN (Ours)",        hkgan_metrics)
     report.append("-" * 80)
     report.append("")
 
@@ -314,22 +338,17 @@ def generate_report(dataset, baseline_metrics, hkgan_metrics):
     report.append(f"{'Model':<20} {'Neg F1 (%)':>12} {'Neu F1 (%)':>12} {'Pos F1 (%)':>12}")
     report.append("-" * 80)
 
-    if baseline_metrics and baseline_metrics.get('test_f1_neg'):
-        neg = f"{baseline_metrics['test_f1_neg']*100:.2f}"
-        neu = f"{baseline_metrics['test_f1_neu']*100:.2f}" if baseline_metrics.get('test_f1_neu') else "N/A"
-        pos = f"{baseline_metrics['test_f1_pos']*100:.2f}" if baseline_metrics.get('test_f1_pos') else "N/A"
-        report.append(f"{'Baseline':<20} {neg:>12} {neu:>12} {pos:>12}")
-    else:
-        report.append(f"{'Baseline':<20} {'N/A':>12} {'N/A':>12} {'N/A':>12}")
+    def fmt_per_class(label, m):
+        if m and m.get('test_f1_neg') is not None:
+            neg = f"{m['test_f1_neg']*100:.2f}"
+            neu = f"{m['test_f1_neu']*100:.2f}" if m.get('test_f1_neu') is not None else "N/A"
+            pos = f"{m['test_f1_pos']*100:.2f}" if m.get('test_f1_pos') is not None else "N/A"
+        else:
+            neg = neu = pos = "N/A"
+        report.append(f"{label:<20} {neg:>12} {neu:>12} {pos:>12}")
 
-    if hkgan_metrics and hkgan_metrics.get('test_f1_neg'):
-        neg = f"{hkgan_metrics['test_f1_neg']*100:.2f}"
-        neu = f"{hkgan_metrics['test_f1_neu']*100:.2f}" if hkgan_metrics.get('test_f1_neu') else "N/A"
-        pos = f"{hkgan_metrics['test_f1_pos']*100:.2f}" if hkgan_metrics.get('test_f1_pos') else "N/A"
-        report.append(f"{'HKGAN':<20} {neg:>12} {neu:>12} {pos:>12}")
-    else:
-        report.append(f"{'HKGAN':<20} {'N/A':>12} {'N/A':>12} {'N/A':>12}")
-
+    fmt_per_class("Baseline", baseline_metrics)
+    fmt_per_class("HKGAN",    hkgan_metrics)
     report.append("-" * 80)
     report.append("")
 
@@ -337,55 +356,30 @@ def generate_report(dataset, baseline_metrics, hkgan_metrics):
     report.append("-" * 80)
     report.append("混淆矩陣 (Confusion Matrix)")
     report.append("-" * 80)
-    report.append("格式: 行=實際標籤, 列=預測標籤")
-    report.append("      [Negative]  [Neutral]  [Positive]")
+    report.append("格式: 行=實際標籤 (True), 列=預測標籤 (Pred)")
     report.append("")
 
-    if baseline_metrics and baseline_metrics.get('confusion_matrix'):
-        cm = baseline_metrics['confusion_matrix']
-        report.append("Baseline:")
-        report.append(f"  Neg    {cm[0][0]:>6}     {cm[0][1]:>6}     {cm[0][2]:>6}")
-        report.append(f"  Neu    {cm[1][0]:>6}     {cm[1][1]:>6}     {cm[1][2]:>6}")
-        report.append(f"  Pos    {cm[2][0]:>6}     {cm[2][1]:>6}     {cm[2][2]:>6}")
-        # 計算並顯示各類別的精確率和召回率
-        total_neg = sum(cm[0])
-        total_neu = sum(cm[1])
-        total_pos = sum(cm[2])
-        pred_neg = cm[0][0] + cm[1][0] + cm[2][0]
-        pred_neu = cm[0][1] + cm[1][1] + cm[2][1]
-        pred_pos = cm[0][2] + cm[1][2] + cm[2][2]
-        report.append(f"  Recall:  Neg={cm[0][0]/total_neg*100:.1f}%  Neu={cm[1][1]/total_neu*100:.1f}%  Pos={cm[2][2]/total_pos*100:.1f}%")
-        if pred_neg > 0 and pred_neu > 0 and pred_pos > 0:
-            report.append(f"  Precision: Neg={cm[0][0]/pred_neg*100:.1f}%  Neu={cm[1][1]/pred_neu*100:.1f}%  Pos={cm[2][2]/pred_pos*100:.1f}%")
-        report.append("")
+    has_base_cm  = baseline_metrics and baseline_metrics.get('confusion_matrix')
+    has_hkgan_cm = hkgan_metrics    and hkgan_metrics.get('confusion_matrix')
 
-    if hkgan_metrics and hkgan_metrics.get('confusion_matrix'):
-        cm = hkgan_metrics['confusion_matrix']
-        report.append("HKGAN:")
-        report.append(f"  Neg    {cm[0][0]:>6}     {cm[0][1]:>6}     {cm[0][2]:>6}")
-        report.append(f"  Neu    {cm[1][0]:>6}     {cm[1][1]:>6}     {cm[1][2]:>6}")
-        report.append(f"  Pos    {cm[2][0]:>6}     {cm[2][1]:>6}     {cm[2][2]:>6}")
-        # 計算並顯示各類別的精確率和召回率
-        total_neg = sum(cm[0])
-        total_neu = sum(cm[1])
-        total_pos = sum(cm[2])
-        pred_neg = cm[0][0] + cm[1][0] + cm[2][0]
-        pred_neu = cm[0][1] + cm[1][1] + cm[2][1]
-        pred_pos = cm[0][2] + cm[1][2] + cm[2][2]
-        report.append(f"  Recall:  Neg={cm[0][0]/total_neg*100:.1f}%  Neu={cm[1][1]/total_neu*100:.1f}%  Pos={cm[2][2]/total_pos*100:.1f}%")
-        if pred_neg > 0 and pred_neu > 0 and pred_pos > 0:
-            report.append(f"  Precision: Neg={cm[0][0]/pred_neg*100:.1f}%  Neu={cm[1][1]/pred_neu*100:.1f}%  Pos={cm[2][2]/pred_pos*100:.1f}%")
-        report.append("")
+    if has_base_cm:
+        _append_cm_block(report, "Baseline", baseline_metrics['confusion_matrix'],
+                         baseline_metrics.get('n_seeds', 1))
+    if has_hkgan_cm:
+        _append_cm_block(report, "HKGAN", hkgan_metrics['confusion_matrix'],
+                         hkgan_metrics.get('n_seeds', 1))
 
-    # 混淆矩陣對比分析
-    if baseline_metrics and hkgan_metrics and baseline_metrics.get('confusion_matrix') and hkgan_metrics.get('confusion_matrix'):
-        cm_base = baseline_metrics['confusion_matrix']
-        cm_hkgan = hkgan_metrics['confusion_matrix']
-        report.append("混淆矩陣變化 (HKGAN - Baseline):")
-        for i, label in enumerate(['Neg', 'Neu', 'Pos']):
-            diff = [cm_hkgan[i][j] - cm_base[i][j] for j in range(3)]
-            diff_str = [f"{d:+d}" for d in diff]
-            report.append(f"  {label}    {diff_str[0]:>6}     {diff_str[1]:>6}     {diff_str[2]:>6}")
+    # 差異矩陣（僅當兩者都有且 seed 數相同時才有意義）
+    if has_base_cm and has_hkgan_cm:
+        cm_b = baseline_metrics['confusion_matrix']
+        cm_h = hkgan_metrics['confusion_matrix']
+        report.append("差異矩陣 (HKGAN - Baseline):")
+        report.append(f"  {'':10}  {'Pred Neg':>10}  {'Pred Neu':>10}  {'Pred Pos':>10}")
+        report.append(f"  {'-'*43}")
+        for i, row_label in enumerate(['Neg', 'Neu', 'Pos']):
+            diff = [cm_h[i][j] - cm_b[i][j] for j in range(3)]
+            diff_s = [f"{d:+.0f}" for d in diff]
+            report.append(f"  {'True '+row_label:<10}  {diff_s[0]:>10}  {diff_s[1]:>10}  {diff_s[2]:>10}")
         report.append("")
 
     report.append("-" * 80)
@@ -397,38 +391,29 @@ def generate_report(dataset, baseline_metrics, hkgan_metrics):
         report.append("改進分析 (HKGAN vs Baseline)")
         report.append("-" * 80)
 
+        def diff_line(label, diff_val):
+            sym = "↑" if diff_val > 0 else ("↓" if diff_val < 0 else "=")
+            return f"  {label:<12} {sym} {diff_val:+.2f}%"
+
         acc_diff = (hkgan_metrics['test_acc'] - baseline_metrics['test_acc']) * 100
-        f1_diff = (hkgan_metrics['test_f1'] - baseline_metrics['test_f1']) * 100
+        f1_diff  = (hkgan_metrics['test_f1']  - baseline_metrics['test_f1'])  * 100
+        report.append(diff_line("Accuracy:", acc_diff))
+        report.append(diff_line("Macro-F1:", f1_diff))
 
-        acc_symbol = "↑" if acc_diff > 0 else "↓" if acc_diff < 0 else "="
-        f1_symbol = "↑" if f1_diff > 0 else "↓" if f1_diff < 0 else "="
-
-        report.append(f"  Accuracy:  {acc_symbol} {abs(acc_diff):+.2f}%")
-        report.append(f"  Macro-F1:  {f1_symbol} {abs(f1_diff):+.2f}%")
-
-        # AUC improvement
         if baseline_metrics.get('test_auc_macro') and hkgan_metrics.get('test_auc_macro'):
             auc_diff = (hkgan_metrics['test_auc_macro'] - baseline_metrics['test_auc_macro']) * 100
-            auc_symbol = "↑" if auc_diff > 0 else "↓" if auc_diff < 0 else "="
-            report.append(f"  AUC:       {auc_symbol} {abs(auc_diff):+.2f}%")
+            report.append(diff_line("AUC:", auc_diff))
 
-        # Per-class improvement
-        if baseline_metrics.get('test_f1_neg') and hkgan_metrics.get('test_f1_neg'):
-            neg_diff = (hkgan_metrics['test_f1_neg'] - baseline_metrics['test_f1_neg']) * 100
-            neu_diff = (hkgan_metrics['test_f1_neu'] - baseline_metrics['test_f1_neu']) * 100
-            pos_diff = (hkgan_metrics['test_f1_pos'] - baseline_metrics['test_f1_pos']) * 100
-
-            report.append(f"  Neg F1:    {'+' if neg_diff >= 0 else ''}{neg_diff:.2f}%")
-            report.append(f"  Neu F1:    {'+' if neu_diff >= 0 else ''}{neu_diff:.2f}%")
-            report.append(f"  Pos F1:    {'+' if pos_diff >= 0 else ''}{pos_diff:.2f}%")
+        if baseline_metrics.get('test_f1_neg') is not None and hkgan_metrics.get('test_f1_neg') is not None:
+            report.append(diff_line("Neg F1:", (hkgan_metrics['test_f1_neg'] - baseline_metrics['test_f1_neg']) * 100))
+            report.append(diff_line("Neu F1:", (hkgan_metrics['test_f1_neu'] - baseline_metrics['test_f1_neu']) * 100))
+            report.append(diff_line("Pos F1:", (hkgan_metrics['test_f1_pos'] - baseline_metrics['test_f1_pos']) * 100))
 
         report.append("")
-
-        # 結論
         if f1_diff > 0:
-            report.append(f"  ✓ HKGAN 在 {display_name} 數據集上超越 Baseline {f1_diff:.2f}% (Macro-F1)")
+            report.append(f"  ✓ HKGAN 在 {display_name} 數據集上超越 Baseline {f1_diff:+.2f}% (Macro-F1)")
         elif f1_diff < 0:
-            report.append(f"  ✗ HKGAN 在 {display_name} 數據集上低於 Baseline {abs(f1_diff):.2f}% (Macro-F1)")
+            report.append(f"  ✗ HKGAN 在 {display_name} 數據集上低於 Baseline {f1_diff:+.2f}% (Macro-F1)")
         else:
             report.append(f"  = HKGAN 與 Baseline 在 {display_name} 數據集上持平")
 

@@ -1,8 +1,8 @@
 """
 批次執行實驗腳本
 
-注意：下方命令請「照原樣」複製貼上。
-      有些參數是選填的，會用「# 可加」標示，需要時再自行補上。
+注意:下方命令請"照原樣"複製貼上.
+      有些參數是選填的,會用"# 可加"標示,需要時再自行補上.
 
 ════════════════════════════════════════════════════════════════
  單一資料集 ── HKGAN
@@ -13,7 +13,7 @@
   python run_experiments.py --dataset rest16      --hkgan
   python run_experiments.py --dataset lap16       --hkgan
 
-  # 想跑 5 個種子？在結尾加上 --multi-seed，例如：
+  # 想跑 5 個種子?在結尾加上 --multi-seed,例如:
   python run_experiments.py --dataset laptops --hkgan --multi-seed
 
 ════════════════════════════════════════════════════════════════
@@ -25,50 +25,51 @@
   python run_experiments.py --dataset rest16      --baseline
   python run_experiments.py --dataset lap16       --baseline
 
-  # 想跑 5 個種子？在結尾加上 --multi-seed，例如：
+  # 想跑 5 個種子?在結尾加上 --multi-seed,例如:
   python run_experiments.py --dataset laptops --baseline --multi-seed
 
 ════════════════════════════════════════════════════════════════
  全部 5 個資料集一起跑
 ════════════════════════════════════════════════════════════════
-  # HKGAN（5 資料集）
+  # HKGAN(5 資料集)
   python run_experiments.py --hkgan --full-run
 
-  # HKGAN（5 資料集 × 5 種子）
+  # HKGAN(5 資料集 x 5 種子)
   python run_experiments.py --hkgan --full-run --multi-seed
 
-  # HKGAN（5 資料集 × 5 種子，跑完自動清理多餘 checkpoint）
+  # HKGAN(5 資料集 x 5 種子,跑完自動清理多餘 checkpoint)
   python run_experiments.py --hkgan --full-run --multi-seed --auto-cleanup
 
-  # Baseline（5 資料集）
+  # Baseline(5 資料集)
   python run_experiments.py --full-baseline
 
-  # Baseline（5 資料集 × 5 種子）
+  # Baseline(5 資料集 x 5 種子)
   python run_experiments.py --full-baseline --multi-seed
 
 ════════════════════════════════════════════════════════════════
- 論文全流程（Baseline → HKGAN → 消融，5 資料集 × 5 種子）
+ 論文全流程(Baseline → HKGAN,5 資料集 x 5 種子)
 ════════════════════════════════════════════════════════════════
   python run_experiments.py --full-thesis --multi-seed --auto-cleanup
+  # 注意:消融實驗請單獨執行 run_ablation.py
 
 ════════════════════════════════════════════════════════════════
- 只生成報告（不重新訓練）
+ 只生成報告(不重新訓練)
 ════════════════════════════════════════════════════════════════
   python run_experiments.py --report-only
-  # 自動對全部資料集生成：HKGAN 對比表、統計顯著性、論文圖表
-  # 若某資料集尚無結果，會自動跳過
+  # 自動對全部資料集生成:HKGAN 對比表,統計顯著性,論文圖表
+  # 若某資料集尚無結果,會自動跳過
 
   python run_experiments.py --ensemble-only
-  # 只跑 Ensemble 推理（三策略），結果存 results/HKGAN_Ensemble_{dataset}.txt
-  # Ensemble 結果不納入主實驗，按需執行
+  # 只跑 Ensemble 推理(三策略),結果存 results/HKGAN_Ensemble_{dataset}.txt
+  # Ensemble 結果不納入主實驗,按需執行
 
 ════════════════════════════════════════════════════════════════
  清理多餘的 Checkpoint
 ════════════════════════════════════════════════════════════════
-  # 預覽模式（只列出會刪什麼，不實際刪除）
+  # 預覽模式(只列出會刪什麼,不實際刪除)
   python run_experiments.py --cleanup-only
 
-  # 實際執行（先備份 txt 報告，再刪除實驗資料夾）
+  # 實際執行(先備份 txt 報告,再刪除實驗資料夾)
   python run_experiments.py --cleanup-only --execute
 """
 
@@ -84,7 +85,7 @@ import numpy as np
 from scipy import stats
 from utils.checkpoint_cleaner import run_cleanup, print_cleanup_summary
 
-# Windows cp950 終端機無法顯示 Unicode 特殊符號，強制使用 utf-8 輸出
+# Windows cp950 終端機無法顯示 Unicode 特殊符號,強制使用 utf-8 輸出
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ('utf-8', 'utf8'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
@@ -109,7 +110,7 @@ def get_display_name(dataset):
 # ──────────────────────────────────────────────────────────────
 
 def run_experiment(config_path, description, dataset, seed_override=None):
-    """呼叫 train_from_config.py 執行單次實驗。"""
+    """呼叫 train_from_config.py 執行單次實驗."""
     cmd = [
         sys.executable,
         "experiments/train_from_config.py",
@@ -131,7 +132,7 @@ def run_experiment(config_path, description, dataset, seed_override=None):
 
 
 def generate_hkgan_report(dataset):
-    """呼叫 generate_hkgan_report.py 生成對比報告。"""
+    """呼叫 generate_hkgan_report.py 生成對比報告."""
     import os
     cmd = [sys.executable, "experiments/generate_hkgan_report.py", "--dataset", dataset]
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
@@ -147,7 +148,7 @@ def generate_hkgan_report(dataset):
 
 
 def generate_thesis_figures():
-    """呼叫 plot_thesis_figures.py 生成論文圖表（含 ROC 曲線）。"""
+    """呼叫 plot_thesis_figures.py 生成論文圖表(含 ROC 曲線)."""
     cmd = [
         sys.executable,
         "experiments/plot_thesis_figures.py",
@@ -158,7 +159,7 @@ def generate_thesis_figures():
     import os
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     try:
-        print(f"\n{'='*60}\n生成論文圖表（含 ROC 曲線）...\n{'='*60}\n")
+        print(f"\n{'='*60}\n生成論文圖表(含 ROC 曲線)...\n{'='*60}\n")
         subprocess.run(cmd, check=True, env=env)
         print(f"\n[OK] 圖表已保存至 results/figures/")
         return True
@@ -175,7 +176,7 @@ def generate_thesis_figures():
 # ──────────────────────────────────────────────────────────────
 
 def run_baseline_only(dataset, multi_seed=False):
-    """執行 Baseline（單種子或多種子）。"""
+    """執行 Baseline(單種子或多種子)."""
     config_path = Path("configs/unified_baseline.yaml")
     if not config_path.exists():
         print(f"  ERROR: unified_baseline.yaml not found")
@@ -192,7 +193,7 @@ def run_baseline_only(dataset, multi_seed=False):
 
 
 def run_multi_seed_baseline(dataset, config_path):
-    """以 MULTI_SEED_LIST 中所有種子執行 Baseline，供統計顯著性檢驗使用。"""
+    """以 MULTI_SEED_LIST 中所有種子執行 Baseline,供統計顯著性檢驗使用."""
     results_dir = Path("results/baseline") / dataset
 
     print(f"\n{'='*80}\n[Multi-Seed Baseline] {get_display_name(dataset)}  seeds={MULTI_SEED_LIST}\n{'='*80}\n")
@@ -228,7 +229,7 @@ def run_multi_seed_baseline(dataset, config_path):
 
 
 def generate_baseline_multiseed_report(dataset, results):
-    """將 Baseline 多種子結果寫成 txt 報告並印出。"""
+    """將 Baseline 多種子結果寫成 txt 報告並印出."""
     reports_dir = Path("results")
     reports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -296,7 +297,7 @@ def generate_baseline_multiseed_report(dataset, results):
 # ──────────────────────────────────────────────────────────────
 
 def run_hkgan_experiments(dataset, multi_seed=False):
-    """執行 HKGAN（單種子或多種子）。"""
+    """執行 HKGAN(單種子或多種子)."""
     config_path = Path("configs/unified_hkgan.yaml")
     if not config_path.exists():
         print(f"  ERROR: unified_hkgan.yaml not found")
@@ -314,7 +315,7 @@ def run_hkgan_experiments(dataset, multi_seed=False):
 
 
 def run_multi_seed_hkgan(dataset, config_path):
-    """以 MULTI_SEED_LIST 中所有種子執行 HKGAN，計算 mean±std 並儲存報告。"""
+    """以 MULTI_SEED_LIST 中所有種子執行 HKGAN,計算 mean±std 並儲存報告."""
     results_dir = Path("results/improved") / dataset
 
     print(f"\n{'='*80}\n[Multi-Seed HKGAN] {get_display_name(dataset)}  seeds={MULTI_SEED_LIST}\n{'='*80}\n")
@@ -359,7 +360,7 @@ def run_multi_seed_hkgan(dataset, config_path):
 
 
 def get_latest_experiment_result(results_dir):
-    """讀取最新 improved 實驗目錄的 test_metrics（含 logit_adj）。"""
+    """讀取最新 improved 實驗目錄的 test_metrics(含 logit_adj)."""
     if not results_dir.exists():
         return None
     exp_dirs = sorted(results_dir.glob("*_hkgan*"),
@@ -379,7 +380,7 @@ def get_latest_experiment_result(results_dir):
 
 
 def get_baseline_result(dataset):
-    """讀取最新 baseline 實驗目錄的 test_metrics（相容 bert_cls 與 bert_only 目錄名）。"""
+    """讀取最新 baseline 實驗目錄的 test_metrics(相容 bert_cls 與 bert_only 目錄名)."""
     baseline_dir = Path("results/baseline") / dataset
     if not baseline_dir.exists():
         return None
@@ -398,7 +399,7 @@ def get_baseline_result(dataset):
 
 
 def generate_multi_seed_report(dataset, results):
-    """將 HKGAN 多種子結果寫成 txt 報告（含 Baseline 對比與穩定性評估）。"""
+    """將 HKGAN 多種子結果寫成 txt 報告(含 Baseline 對比與穩定性評估)."""
     reports_dir = Path("results")
     reports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -552,13 +553,13 @@ def generate_multi_seed_report(dataset, results):
 
 
 # ──────────────────────────────────────────────────────────────
-# Ensemble 推理（呼叫 utils/ensemble_runner.py，結果存檔）
+# Ensemble 推理(呼叫 utils/ensemble_runner.py,結果存檔)
 # ──────────────────────────────────────────────────────────────
 
 def run_ensemble_test(dataset):
     """
-    5-seed 訓練完成後自動執行三策略 Ensemble 推理，
-    結果存至 results/HKGAN_Ensemble_{dataset}.txt。
+    5-seed 訓練完成後自動執行三策略 Ensemble 推理,
+    結果存至 results/HKGAN_Ensemble_{dataset}.txt.
     """
     print(f"\n{'='*60}\n[Ensemble] {get_display_name(dataset)} 三策略 Ensemble\n{'='*60}\n")
     try:
@@ -567,11 +568,11 @@ def run_ensemble_test(dataset):
         if result and result.get('output_path'):
             print(f"\n[OK] Ensemble 報告已保存至: {result['output_path']}")
         elif not result:
-            print(f"\n[WARN] Ensemble 無結果（checkpoint 不足或推理失敗）")
+            print(f"\n[WARN] Ensemble 無結果(checkpoint 不足或推理失敗)")
     except KeyboardInterrupt:
-        print(f"\n[WARN] Ensemble 被中斷，繼續主流程\n")
+        print(f"\n[WARN] Ensemble 被中斷,繼續主流程\n")
     except Exception as e:
-        print(f"\n[WARN] Ensemble 失敗: {e}，繼續主流程\n")
+        print(f"\n[WARN] Ensemble 失敗: {e},繼續主流程\n")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -579,7 +580,7 @@ def run_ensemble_test(dataset):
 # ──────────────────────────────────────────────────────────────
 
 def run_statistical_significance_test(datasets=None):
-    """對各資料集執行 HKGAN vs Baseline 的 Paired t-test 與 Wilcoxon 檢驗。"""
+    """對各資料集執行 HKGAN vs Baseline 的 Paired t-test 與 Wilcoxon 檢驗."""
     if datasets is None:
         datasets = ALL_DATASETS
     improved_dir = Path("results/improved")
@@ -612,7 +613,7 @@ def run_statistical_significance_test(datasets=None):
                         hkgan_f1_by_seed[seed]  = m.get('f1_macro', 0) * 100
                         hkgan_acc_by_seed[seed] = m.get('accuracy', 0) * 100
 
-        # 讀取 Baseline 結果（相容 *_baseline_* 和 *_ablation_bert_only*）
+        # 讀取 Baseline 結果(相容 *_baseline_* 和 *_ablation_bert_only*)
         bl_dir = baseline_dir / dataset
         if bl_dir.exists():
             for exp in list(bl_dir.glob("*_baseline_*")) + list(bl_dir.glob("*_ablation_bert_only*")):
@@ -627,7 +628,7 @@ def run_statistical_significance_test(datasets=None):
 
         common_seeds = sorted(set(hkgan_f1_by_seed) & set(baseline_f1_by_seed))
         if len(common_seeds) < 2:
-            print(f"  警告: 配對數據不足（需要至少 2 個共同 seed）")
+            print(f"  警告: 配對數據不足(需要至少 2 個共同 seed)")
             print(f"  HKGAN seeds: {sorted(hkgan_f1_by_seed)}  Baseline seeds: {sorted(baseline_f1_by_seed)}")
             continue
 
@@ -688,7 +689,7 @@ def run_statistical_significance_test(datasets=None):
 
 
 def generate_significance_report(all_results):
-    """將統計顯著性結果寫成 txt 報告並印出。"""
+    """將統計顯著性結果寫成 txt 報告並印出."""
     reports_dir = Path("results")
     reports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -741,7 +742,7 @@ def generate_significance_report(all_results):
 # ──────────────────────────────────────────────────────────────
 
 def _run_full_thesis(multi_seed: bool = False, auto_cleanup: bool = False) -> None:
-    """依序執行：Stage 1 Baseline → Stage 2 HKGAN → Stage 3 消融。"""
+    """依序執行:Stage 1 Baseline → Stage 2 HKGAN.消融實驗請使用 run_ablation.py."""
     seed_tag = "Multi-Seed" if multi_seed else "Single-Seed"
     print(f"\n{'#'*80}")
     print(f"# 論文全流程 ({seed_tag})")
@@ -753,7 +754,7 @@ def _run_full_thesis(multi_seed: bool = False, auto_cleanup: bool = False) -> No
     stage_results = {}
 
     # Stage 1: Baseline
-    print(f"\n{'='*80}\n[Stage 1/3] Baseline × {len(ALL_DATASETS)} 資料集\n{'='*80}")
+    print(f"\n{'='*80}\n[Stage 1/2] Baseline x {len(ALL_DATASETS)} 資料集\n{'='*80}")
     stage_results['baseline'] = {}
     for dataset in ALL_DATASETS:
         print(f"\n{'#'*60}\n# [Baseline] {get_display_name(dataset)}\n{'#'*60}")
@@ -761,27 +762,12 @@ def _run_full_thesis(multi_seed: bool = False, auto_cleanup: bool = False) -> No
         stage_results['baseline'][dataset] = 'OK' if ok else 'FAIL'
 
     # Stage 2: HKGAN
-    print(f"\n{'='*80}\n[Stage 2/3] HKGAN × {len(ALL_DATASETS)} 資料集\n{'='*80}")
+    print(f"\n{'='*80}\n[Stage 2/2] HKGAN x {len(ALL_DATASETS)} 資料集\n{'='*80}")
     stage_results['hkgan'] = {}
     for dataset in ALL_DATASETS:
         print(f"\n{'#'*60}\n# [HKGAN] {get_display_name(dataset)}\n{'#'*60}")
         ok = run_hkgan_experiments(dataset, multi_seed=multi_seed)
         stage_results['hkgan'][dataset] = 'OK' if ok else 'FAIL'
-
-    # Stage 3: 消融實驗（委派給 run_ablation.py）
-    print(f"\n{'='*80}\n[Stage 3/3] 消融實驗 × {len(ALL_DATASETS)} 資料集 × 5 變體\n{'='*80}")
-    ablation_cmd = [sys.executable, "run_ablation.py", "--full-study"]
-    if multi_seed:
-        ablation_cmd.append("--multi-seed")
-    try:
-        subprocess.run(ablation_cmd, check=True)
-        stage_results['ablation'] = 'OK'
-    except subprocess.CalledProcessError as e:
-        print(f"\n[!] 消融實驗失敗 (code: {e.returncode})")
-        stage_results['ablation'] = 'FAIL'
-    except KeyboardInterrupt:
-        print(f"\n[!] 消融實驗被中斷")
-        stage_results['ablation'] = 'INTERRUPTED'
 
     # 全流程總結
     print(f"\n{'='*80}\n  論文全流程完成摘要\n{'='*80}")
@@ -795,7 +781,7 @@ def _run_full_thesis(multi_seed: bool = False, auto_cleanup: bool = False) -> No
             print(f"  {stage:<12}: {'✓' if res=='OK' else '✗'} {res}")
     print(f"{'='*80}\n")
 
-    # Stage 4: 報告輸出（HKGAN 對比報告 + 統計顯著性 + 圖表）
+    # Stage 4: 報告輸出(HKGAN 對比報告 + 綜合報告 + 統計顯著性 + 圖表)
     print(f"\n{'='*80}\n[Stage 4/4] 報告輸出\n{'='*80}")
     for dataset in ALL_DATASETS:
         if stage_results.get('hkgan', {}).get(dataset) == 'OK':
@@ -813,10 +799,10 @@ def _run_full_thesis(multi_seed: bool = False, auto_cleanup: bool = False) -> No
 
 def _backup_and_cleanup(execute: bool) -> None:
     """
-    備份 results/ 下所有 .txt，再刪除整個 results/ 內容。
+    備份 results/ 下所有 .txt,再刪除整個 results/ 內容.
 
-    dry-run（預設）：列出將備份的 txt 和將刪除的資料夾，不實際執行。
-    --execute：備份後刪除。
+    dry-run(預設):列出將備份的 txt 和將刪除的資料夾,不實際執行.
+    --execute:備份後刪除.
     """
     project_root = Path(__file__).parent
     results_root = project_root / "results"
@@ -824,7 +810,7 @@ def _backup_and_cleanup(execute: bool) -> None:
     backup_path  = project_root / "backup" / date_str
 
     if not results_root.exists():
-        print(f"\n  results/ 資料夾不存在，無需清理。\n")
+        print(f"\n  results/ 資料夾不存在,無需清理.\n")
         return
 
     top_txt = sorted(results_root.glob("*.txt"))
@@ -852,20 +838,20 @@ def _backup_and_cleanup(execute: bool) -> None:
         return f"{b:.1f} TB"
 
     mode = "執行模式" if execute else "Dry-Run 模式"
-    print(f"\n{'='*70}\n  結果備份與清理（{mode}）\n{'='*70}")
-    print(f"\n  實驗資料夾：{len(exp_dirs)} 個   總大小：{fmt(total_bytes)}")
-    print(f"  將備份 txt：{len(all_txt)} 個（頂層 {len(top_txt)} + 子資料夾 {len(exp_txt)}）")
-    print(f"  備份目標：  {backup_path}")
-    print(f"\n  備份清單（txt）：")
+    print(f"\n{'='*70}\n  結果備份與清理({mode})\n{'='*70}")
+    print(f"\n  實驗資料夾:{len(exp_dirs)} 個   總大小:{fmt(total_bytes)}")
+    print(f"  將備份 txt:{len(all_txt)} 個(頂層 {len(top_txt)} + 子資料夾 {len(exp_txt)})")
+    print(f"  備份目標:  {backup_path}")
+    print(f"\n  備份清單(txt):")
     for txt in all_txt:
         print(f"    {txt.relative_to(project_root)}")
-    print(f"\n  刪除清單（results/ 全部內容）：")
+    print(f"\n  刪除清單(results/ 全部內容):")
     for item in sorted(results_root.iterdir()):
         size = sum(f.stat().st_size for f in item.rglob("*") if f.is_file()) if item.is_dir() else item.stat().st_size
         print(f"    {'(dir) ' if item.is_dir() else ''}{item.name}  [{fmt(size)}]")
 
     if not execute:
-        print(f"\n  [!] Dry-Run，未執行任何操作。確認後加上 --execute 實際執行。\n{'='*70}\n")
+        print(f"\n  [!] Dry-Run,未執行任何操作.確認後加上 --execute 實際執行.\n{'='*70}\n")
         return
 
     print(f"\n  正在備份 txt...")
@@ -879,7 +865,7 @@ def _backup_and_cleanup(execute: bool) -> None:
         except Exception as e:
             print(f"    [錯誤] {txt.relative_to(project_root)}: {e}")
             fail += 1
-    print(f"  備份完成：{ok} 成功，{fail} 失敗")
+    print(f"  備份完成:{ok} 成功,{fail} 失敗")
 
     print(f"\n  正在清空 results/...")
     ok = fail = 0
@@ -890,12 +876,12 @@ def _backup_and_cleanup(execute: bool) -> None:
         except Exception as e:
             print(f"    [錯誤] {item.name}: {e}")
             fail += 1
-    print(f"  清空完成：{ok} 項刪除成功，{fail} 失敗")
+    print(f"  清空完成:{ok} 項刪除成功,{fail} 失敗")
     print(f"{'='*70}\n")
 
 
 def _maybe_cleanup(auto_cleanup: bool) -> None:
-    """實驗完成後觸發 checkpoint 清理（若啟用）。"""
+    """實驗完成後觸發 checkpoint 清理(若啟用)."""
     if not auto_cleanup:
         return
     print("\n[自動清理] 開始清理多餘 checkpoint...")
@@ -909,18 +895,18 @@ def _maybe_cleanup(auto_cleanup: bool) -> None:
 def main():
     parser = argparse.ArgumentParser(description='批次執行實驗')
     parser.add_argument('--dataset', choices=ALL_DATASETS,
-                        help='目標資料集（full-run 模式不需要指定）')
+                        help='目標資料集(full-run 模式不需要指定)')
     parser.add_argument('--hkgan',            action='store_true', help='執行 HKGAN 實驗')
     parser.add_argument('--baseline',         action='store_true', help='執行 Baseline 實驗')
-    parser.add_argument('--multi-seed',       action='store_true', help='多種子模式（seeds: 42,123,2023,999,0）')
-    parser.add_argument('--full-run',         action='store_true', help='對所有資料集執行（搭配 --hkgan）')
+    parser.add_argument('--multi-seed',       action='store_true', help='多種子模式(seeds: 42,123,2023,999,0)')
+    parser.add_argument('--full-run',         action='store_true', help='對所有資料集執行(搭配 --hkgan)')
     parser.add_argument('--full-baseline',    action='store_true', help='對所有資料集執行 Baseline')
-    parser.add_argument('--full-thesis',      action='store_true', help='論文全流程：Baseline → HKGAN → 消融')
-    parser.add_argument('--report-only',      action='store_true', help='只生成報告（HKGAN 對比 + 統計顯著性 + 圖表），不訓練')
-    parser.add_argument('--ensemble-only',    action='store_true', help='只跑 Ensemble 推理（三策略），結果存 HKGAN_Ensemble_{dataset}.txt')
+    parser.add_argument('--full-thesis',      action='store_true', help='論文全流程:Baseline → HKGAN(消融請用 run_ablation.py)')
+    parser.add_argument('--report-only',      action='store_true', help='只生成報告(HKGAN 對比 + 統計顯著性 + 圖表),不訓練')
+    parser.add_argument('--ensemble-only',    action='store_true', help='只跑 Ensemble 推理(三策略),結果存 HKGAN_Ensemble_{dataset}.txt')
     parser.add_argument('--auto-cleanup',     action='store_true', help='實驗後自動清理多餘 checkpoint')
-    parser.add_argument('--cleanup-only',     action='store_true', help='獨立清理模式（預設 dry-run）')
-    parser.add_argument('--execute',          action='store_true', help='搭配 --cleanup-only，實際執行刪除')
+    parser.add_argument('--cleanup-only',     action='store_true', help='獨立清理模式(預設 dry-run)')
+    parser.add_argument('--execute',          action='store_true', help='搭配 --cleanup-only,實際執行刪除')
     args = parser.parse_args()
 
     # 各模式分派
@@ -934,7 +920,7 @@ def main():
             if imp_dir.exists() and any(imp_dir.glob("*/reports/experiment_results.json")):
                 run_ensemble_test(ds)
             else:
-                print(f"  [{get_display_name(ds)}] 無 HKGAN 結果，跳過")
+                print(f"  [{get_display_name(ds)}] 無 HKGAN 結果,跳過")
         return
 
     if args.report_only:
@@ -977,14 +963,14 @@ def main():
         return
 
     if args.dataset is None:
-        parser.error("--dataset 為必要參數（除非使用 --full-run / --full-baseline / --full-thesis / --report-only）")
+        parser.error("--dataset 為必要參數(除非使用 --full-run / --full-baseline / --full-thesis / --report-only)")
 
     if args.hkgan:
         run_hkgan_experiments(args.dataset, args.multi_seed)
     elif args.baseline:
         run_baseline_only(args.dataset, args.multi_seed)
     else:
-        print("提示: 未指定模式，預設使用 HKGAN 模式。")
+        print("提示: 未指定模式,預設使用 HKGAN 模式.")
         run_hkgan_experiments(args.dataset, args.multi_seed)
 
     _maybe_cleanup(args.auto_cleanup)
