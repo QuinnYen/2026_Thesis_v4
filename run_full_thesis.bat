@@ -14,8 +14,8 @@ echo ========================================
 echo   Thesis Experiment Runner
 echo ========================================
 echo.
-echo   1. Full Thesis  (Baseline + HKGAN + Ablation, 5 seeds)
-echo   2. Ablation Only  (5 datasets x 5 seeds)
+echo   1. Full Thesis  (Baseline + HKGAN, 5 datasets x 5 seeds)
+echo   2. Ablation Only  (5 datasets x 5 seeds x 4 variants)
 echo   3. Cleanup Only  (backup + delete checkpoints)
 echo   4. Exit
 echo.
