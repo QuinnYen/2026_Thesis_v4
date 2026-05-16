@@ -144,8 +144,9 @@ Ensemble 報告存於 `results/HKGAN_Ensemble_{dataset}.txt`，由 `utils/ensemb
 │   └── figures/                          # 生成的圖表
 │
 ├── docs/                                 # 文件
-├── run_experiments.py                    # 批次實驗執行腳本
-├── run_ablation.py                       # 消融實驗腳本
+├── 01_setup_data.py                      # 資料初始化（從 HuggingFace 下載、DAPT）
+├── 02_run_experiments.py                 # 批次實驗執行腳本
+├── 03_run_ablation.py                    # 消融實驗腳本
 └── requirements.txt                      # 依賴套件
 ```
 
@@ -170,6 +171,16 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+### 資料初始化（首次執行）
+
+```bash
+# 從 HuggingFace 下載資料集與預訓練模型（推薦，跳過 DAPT）
+python 01_setup_data.py --skip-dapt
+
+# 或完整流程（需先手動下載 Amazon/Yelp 語料後再跑 DAPT）
+python 01_setup_data.py
+```
+
 ---
 
 ## 執行指令
@@ -178,24 +189,24 @@ pip install -r requirements.txt
 
 ```bash
 # 多種子 HKGAN（seeds: 42, 123, 2023, 999, 0）
-python run_experiments.py --full-thesis --multi-seed --auto-cleanup
+python 02_run_experiments.py --full-thesis --multi-seed --auto-cleanup
 ```
 
 ### 全消融實驗
 
 ```bash
 # 完整消融研究（6 變體 × 5 資料集 × 5 seeds）
-python run_ablation.py --full-study --multi-seed --auto-cleanup
+python 03_run_ablation.py --full-study --multi-seed --auto-cleanup
 ```
 
 ### 報表輸出
 
 ```bash
 # HKGAN 實驗報表
-python run_experiments.py --report-only
+python 02_run_experiments.py --report-only
 
 # 消融實驗報表
-python run_ablation.py --report-only
+python 03_run_ablation.py --report-only
 ```
 
 ---

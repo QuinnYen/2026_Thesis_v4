@@ -27,6 +27,9 @@ transformers>=4.30.0  # BERT 和其他預訓練模型
 scipy>=1.10.0
 tensorboard>=2.13.0
 
+# HuggingFace
+huggingface_hub>=0.16.0
+
 # 其他依賴
 h5py>=3.8.0
 pillow>=9.5.0
